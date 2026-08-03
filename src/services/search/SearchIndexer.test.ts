@@ -131,3 +131,21 @@ test('invalidate resets the snapshot to empty', async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('the index orders projects by recency, whatever order the seed arrived in', async () => {
+  const { root, projectPath, encoded } = await fixture();
+  process.env.LAZY_CLAUDE_CLAUDE_DIR = root;
+  SearchIndexer.invalidate();
+
+  // Nothing renders this list, but FilterService keeps caller order inside a
+  // match tier, so it decides which of two equally good project hits the
+  // palette shows first.
+  const older = { ...project(projectPath, encoded), path: '/older', encoded: '-older', lastActivity: 1 };
+  const newer = { ...project(projectPath, encoded), path: '/newer', encoded: '-newer', lastActivity: 9 };
+  await SearchIndexer.warm([older, newer]);
+
+  assert.deepEqual(
+    SearchIndexer.snapshot().projects.map((entry) => entry.path),
+    ['/newer', '/older'],
+  );
+});
