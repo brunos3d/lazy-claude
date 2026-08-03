@@ -1,13 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import os from 'node:os';
 import { Box, Text, useApp, useInput } from 'ink';
-import {
-  listProjects,
-  projectInfo,
-  prune,
-  verify,
-  type ClampProject,
-} from '../lib/clamp.js';
+import { discoverProjects, type Project } from '../lib/projects.js';
+import { healthCheck, projectInfoText, pruneOrphans } from '../lib/maintenance.js';
 import {
   archiveSession,
   deleteSession,
@@ -20,7 +15,6 @@ import {
   type SessionDetail,
   type SessionEntry,
 } from '../lib/sessions.js';
-import { quickListProjects } from '../lib/projects.js';
 import { formatBytes, formatRelativeTime, shortenPath } from '../lib/format.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { DetailPanel } from './DetailPanel.js';
@@ -41,9 +35,9 @@ interface Overlay {
   body: string;
 }
 
-type ProjectItem = { kind: 'all' } | { kind: 'project'; project: ClampProject };
+type ProjectItem = { kind: 'all' } | { kind: 'project'; project: Project };
 
-const HELP_TEXT = `Lazy Clamp keybindings
+const HELP_TEXT = `Lazy Claude keybindings
 
 Navigation
   ↑/k ↓/j        move selection
@@ -52,28 +46,28 @@ Navigation
   esc            back to projects panel
 
 Sessions
-  a              archive session (moves it out of ~/.claude/projects)
+  a              archive session (moves it out of the projects directory)
   r              restore an archived session
   d / x          delete session permanently
   t              toggle live / archived view
 
 Global
   R              refresh everything
-  i              project info (clamp --info)
-  V              health check (clamp --verify)
-  P              prune orphaned session folders (clamp --prune)
+  i              project info
+  V              health check
+  P              prune orphaned session folders
   ?              this help
   q              quit
 
-Powered by clamp (https://github.com/wsagency/claude-move-project).
-Archive is a Lazy Clamp feature: files move to ~/.claude/lazy-clamp/archive.`;
+Archived sessions live in <claude-dir>/lazy-claude/archive and are
+invisible to Claude Code until restored.`;
 
 export function App() {
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
   const home = os.homedir();
 
-  const [projects, setProjects] = useState<ClampProject[] | null>(null);
+  const [projects, setProjects] = useState<Project[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [focus, setFocus] = useState<Focus>('projects');
   const [projectIndex, setProjectIndex] = useState(0);
@@ -91,35 +85,18 @@ export function App() {
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
-  // Paint the projects panel immediately from a fast local scan, then let the
-  // authoritative `clamp --list --json` result replace it once du finishes.
   useEffect(() => {
     let cancelled = false;
-    let clampDone = false;
     setLoadError(null);
-
-    quickListProjects()
+    discoverProjects()
       .then((list) => {
-        if (cancelled || clampDone) return;
-        list.sort((a, b) => b.lastActivity - a.lastActivity);
-        setProjects(list);
-      })
-      .catch(() => {
-        // clamp result still coming; ignore quick-scan failures
-      });
-
-    listProjects()
-      .then((list) => {
-        clampDone = true;
         if (cancelled) return;
         list.sort((a, b) => b.lastActivity - a.lastActivity);
         setProjects(list);
       })
       .catch((error: Error) => {
-        clampDone = true;
         if (!cancelled) setLoadError(error.message);
       });
-
     return () => {
       cancelled = true;
     };
@@ -199,8 +176,8 @@ export function App() {
       setBusy(true);
       try {
         if (active.kind === 'prune') {
-          const result = await prune(false);
-          openOverlay('clamp --prune', result.stdout + (result.stderr ? `\n${result.stderr}` : ''));
+          const report = await pruneOrphans();
+          openOverlay('Prune', report);
         } else if (active.kind === 'archive') {
           await archiveSession(active.session);
           setStatus(`Archived ${active.session.id.slice(0, 8)}`);
@@ -252,10 +229,10 @@ export function App() {
       return;
     }
     if (input === 'V') {
-      setStatus('Running clamp --verify…');
-      void verify().then((result) => {
+      setStatus('Running health check…');
+      void healthCheck().then((report) => {
         setStatus(undefined);
-        openOverlay('clamp --verify', result.stdout + (result.stderr ? `\n${result.stderr}` : ''));
+        openOverlay('Health check', report.text);
       });
       return;
     }
@@ -263,14 +240,9 @@ export function App() {
       setDialog({ kind: 'prune' });
       return;
     }
-    if (input === 'i' && selectedProject && !selectedProject.orphaned) {
-      setStatus('Running clamp --info…');
-      void projectInfo(selectedProject.path).then((result) => {
-        setStatus(undefined);
-        openOverlay(
-          `clamp --info ${shortenPath(selectedProject.path, home)}`,
-          result.stdout + (result.stderr ? `\n${result.stderr}` : ''),
-        );
+    if (input === 'i' && selectedProject) {
+      void projectInfoText(selectedProject).then((text) => {
+        openOverlay(`Info: ${shortenPath(selectedProject.path, home)}`, text);
       });
       return;
     }
@@ -351,7 +323,7 @@ export function App() {
           ['↑↓', 'navigate'],
           ['enter', 'sessions'],
           ['i', 'info'],
-          ['V', 'verify'],
+          ['V', 'health'],
           ['P', 'prune'],
           ['R', 'refresh'],
           ['?', 'help'],
@@ -390,12 +362,12 @@ export function App() {
             }
             message={
               dialog.kind === 'prune'
-                ? 'Run clamp --prune and permanently delete every orphaned session folder in ~/.claude/projects?'
+                ? 'Permanently delete every orphaned session folder in the Claude projects directory?'
                 : dialog.kind === 'delete'
-                  ? `Permanently delete session ${dialog.session.id}? This removes the JSONL file and cannot be undone.`
+                  ? `Permanently delete session ${dialog.session.id}? This removes the session file and cannot be undone.`
                   : dialog.kind === 'archive'
-                    ? `Archive session ${dialog.session.id}? It moves to ~/.claude/lazy-clamp/archive and disappears from Claude Code until restored.`
-                    : `Restore session ${dialog.session.id} back into ~/.claude/projects?`
+                    ? `Archive session ${dialog.session.id}? It moves to the Lazy Claude archive and disappears from Claude Code until restored.`
+                    : `Restore session ${dialog.session.id} back into the Claude projects directory?`
             }
             danger={dialog.kind === 'delete' || dialog.kind === 'prune'}
           />
@@ -411,7 +383,7 @@ export function App() {
               </Box>
             ) : projects === null ? (
               <Box paddingX={1}>
-                <Text dimColor>Loading via clamp --list…</Text>
+                <Text dimColor>Scanning projects…</Text>
               </Box>
             ) : (
               <ListView

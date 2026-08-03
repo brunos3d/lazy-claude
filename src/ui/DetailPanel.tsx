@@ -1,7 +1,7 @@
 import React from 'react';
 import os from 'node:os';
 import { Box, Text } from 'ink';
-import type { ClampProject } from '../lib/clamp.js';
+import type { Project } from '../lib/projects.js';
 import type { SessionDetail, SessionEntry } from '../lib/sessions.js';
 import { formatBytes, formatKb, formatRelativeTime, shortenPath } from '../lib/format.js';
 import { Panel } from './Panel.js';
@@ -10,7 +10,7 @@ interface DetailPanelProps {
   height: number;
   session: SessionEntry | null;
   detail: SessionDetail | null;
-  project: ClampProject | null;
+  project: Project | null;
   showingSession: boolean;
   allSummary: { projects: number; sessions: number; broken: number; orphans: number } | null;
 }
@@ -68,7 +68,7 @@ export function DetailPanel({
           <>
             <Row
               label="Path"
-              value={project.orphaned ? project.path : shortenPath(project.path, home)}
+              value={project.orphaned ? project.encoded : shortenPath(project.path, home)}
             />
             <Row
               label="Status"
@@ -77,18 +77,11 @@ export function DetailPanel({
                   ? 'orphaned session folder (project path unknown)'
                   : project.exists
                     ? 'healthy'
-                    : 'missing (project folder not found, try clamp --fix)'
+                    : 'missing (project directory not found)'
               }
             />
             <Row label="Sessions" value={String(project.sessions)} />
-            <Row
-              label="Size"
-              value={
-                project.projectSizeKb > 0
-                  ? `project ${formatKb(project.projectSizeKb)}, sessions ${formatKb(project.sessionSizeKb)}`
-                  : `sessions ${formatKb(project.sessionSizeKb)}`
-              }
-            />
+            <Row label="Size" value={`sessions ${formatKb(project.sessionSizeKb)}`} />
             {project.lastActivity > 0 ? (
               <Row
                 label="Activity"
@@ -105,9 +98,6 @@ export function DetailPanel({
               label="Health"
               value={`${allSummary.broken} missing, ${allSummary.orphans} orphaned`}
             />
-            {allSummary.broken > 0 ? (
-              <Text color="yellow">Run clamp --fix to repair missing project paths.</Text>
-            ) : null}
           </>
         ) : (
           <Text dimColor>Nothing selected.</Text>

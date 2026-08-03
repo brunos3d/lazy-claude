@@ -9,7 +9,7 @@ interface OutputOverlayProps {
   scroll: number;
 }
 
-/** Fullscreen-ish overlay used to show raw Clamp output (verify, prune, info). */
+/** Fullscreen overlay for multi-line text: help, health check, prune, info. */
 export function OutputOverlay({ title, body, width, height, scroll }: OutputOverlayProps) {
   const innerHeight = Math.max(3, height - 6);
   const lines = body.replaceAll('\r', '').split('\n');

@@ -1,64 +1,50 @@
-# Lazy Clamp
+# Lazy Claude
 
-A terminal UI for browsing and managing Claude Code sessions, in the spirit of [LazyGit](https://github.com/jesseduffield/lazygit). It wraps [Clamp](https://github.com/wsagency/claude-move-project) for project-level operations and adds session-level actions (archive, restore, delete) on top.
+A keyboard-driven terminal UI for managing Claude Code sessions and project history, in the spirit of [LazyGit](https://github.com/jesseduffield/lazygit) and LazyDocker.
 
-## What it does
+Claude Code stores one folder per project under `~/.claude/projects/`, with one JSONL file per session. Over time this accumulates hundreds of sessions across dozens of projects. Lazy Claude gives you a full view of that data and the tools to keep it tidy.
 
-Claude Code stores one folder per project under `~/.claude/projects/`, with one JSONL file per session. Lazy Clamp gives you a keyboard-driven view of all of it:
+## Features
 
-- a Projects panel listing every Claude project on the machine, with health status (healthy, missing path, orphaned session folder)
-- a Sessions panel showing sessions for the highlighted project, or all sessions across every project from the root "All sessions" entry
-- a Detail panel with session metadata: summary, working directory, first message, size, last activity
-- confirmation dialogs for every destructive action
+- Projects panel listing every Claude Code project on the machine, with health status: healthy, missing project directory, or orphaned session folder
+- Sessions panel showing sessions per project, or all sessions across every project
+- Detail panel with session metadata: summary, working directory, first message, size, last activity
+- Archive sessions (move them out of Claude Code's view, reversible)
+- Restore archived sessions
+- Delete sessions permanently
+- Health check for broken project references and orphaned data
+- Prune orphaned session folders
+- Confirmation dialogs for every destructive action
 
-## Relation to Clamp
+Everything is implemented natively in TypeScript on Node.js filesystem APIs. There are no runtime dependencies on other CLI tools and no shell execution.
 
-Clamp is a bash script that moves, lists, verifies, prunes and repairs Claude Code project data. Lazy Clamp shells out to it for the operations Clamp already does well:
+## Installation
 
-- `clamp --list --json` feeds the Projects panel
-- `clamp --info` powers the project info view (`i`)
-- `clamp --verify` runs the health check (`V`)
-- `clamp --prune` removes orphaned session folders (`P`)
-
-Session archive, restore and delete are Lazy Clamp features. Clamp has no per-session commands, so Lazy Clamp operates on the JSONL files directly. Archived sessions move to `~/.claude/lazy-clamp/archive/<encoded-project>/`, outside `~/.claude/projects/`, so Claude Code and Clamp stop seeing them until you restore.
-
-### Which Clamp binary is used
-
-The upstream fixes from [claude-move-project PR #15](https://github.com/wsagency/claude-move-project/pull/15) are not merged yet, so the local clone is treated as the source of truth. Lazy Clamp resolves the binary in this order:
-
-1. `LAZY_CLAMP_BIN` environment variable
-2. `~/github/cloned/claude-move-project/clamp` (the local clone with the PR #15 fixes)
-3. `clamp` on `PATH`
-
-Run `lazy-clamp doctor` to see which binary was picked. Once the PR is merged and released, remove the local clone or point `LAZY_CLAMP_BIN` at the released version and the PATH fallback takes over.
-
-## Running locally
-
-Requires Node.js 18 or newer.
+Not yet published to npm. Once it is:
 
 ```bash
-git clone https://github.com/brunos3d/lazy-clamp.git
-cd lazy-clamp
-npm install
-npm run build
-node dist/cli.js
+npm i -g lazy-claude
+lazy-claude    # or the short alias: lzc
 ```
 
-For a global command during development:
+Until then, install from source:
 
 ```bash
-npm link
-lazy-clamp    # or the shorter alias: lzclamp
+git clone https://github.com/brunos3d/lazy-claude.git
+cd lazy-claude
+npm install
+npm run build
+npm link       # exposes lazy-claude and lzc globally
 ```
 
 ## Commands
 
 ```bash
-lazy-clamp            # open the TUI
-lazy-clamp list       # print projects as JSON (via clamp --list --json)
-lazy-clamp doctor     # show which clamp binary is resolved
-lazy-clamp --help
-lazy-clamp --version
+lazy-claude           # open the TUI
+lazy-claude list      # print discovered projects as JSON
+lazy-claude doctor    # show data directory and discovery stats
+lazy-claude --help
+lazy-claude --version
 ```
 
 ## Keybindings
@@ -73,48 +59,68 @@ lazy-clamp --version
 | `r` | restore an archived session |
 | `d` / `x` | delete session (asks for confirmation) |
 | `t` | toggle live / archived view |
-| `i` | project info (`clamp --info`) |
-| `V` | health check (`clamp --verify`) |
-| `P` | prune orphaned session folders (`clamp --prune`) |
+| `i` | project info |
+| `V` | health check |
+| `P` | prune orphaned session folders |
 | `R` | refresh |
 | `?` | help |
 | `q` | quit |
 
-## Installing through npm (later)
+## How it works
 
-The package is ready for publishing: `bin` exposes `lazy-clamp` and `lzclamp`, `files` ships only `dist/`, and `prepublishOnly` builds first. Once published, installation becomes:
+Claude Code encodes each project path into a folder name by replacing every character outside `[a-zA-Z0-9]` with `-` (for example `/home/user/.claude-mem` becomes `-home-user--claude-mem`). The encoding is lossy, so Lazy Claude never tries to decode folder names. Discovery works forward:
 
-```bash
-npm i -g lazy-clamp
-```
+1. Project paths are read from `~/.claude/history.jsonl`.
+2. Session folders that match no known path encoding are resolved by reading the `cwd` recorded inside their session files.
+3. Folders with no resolvable path are reported as orphaned.
+
+Archiving moves a session file to `~/.claude/lazy-claude/archive/<encoded-project>/`. That directory sits outside `projects/`, so Claude Code stops listing the session until you restore it. Deleting removes the file permanently.
+
+The data directory resolves in this order: `LAZY_CLAUDE_CLAUDE_DIR` (useful for tests), `CLAUDE_CONFIG_DIR` (the same variable Claude Code respects), then `~/.claude`.
 
 ## Architecture
 
 ```
 src/
-  cli.tsx           entry point: arg parsing, TTY check, alt-screen, render
+  cli.tsx             entry point: arg parsing, TTY check, alt-screen, render
   lib/
-    paths.ts        Claude data directory and path encoding
-    clamp.ts        Clamp binary resolution and subprocess calls (execution)
-    sessions.ts     session listing, metadata parsing, archive/restore/delete
-    format.ts       size, time and path formatting
+    paths.ts          data directory resolution and project path encoding
+    projects.ts       project discovery and stats
+    sessions.ts       session discovery, metadata parsing, archive/restore/delete
+    maintenance.ts    health check, prune, project info
+    format.ts         size, time and path formatting
   ui/
-    App.tsx         state, keyboard handling, layout
-    DetailPanel.tsx session and project detail rendering
-    ListView.tsx    scrollable list with a selection window
-    Panel.tsx       bordered panel with focus highlight
+    App.tsx           state, keyboard handling, layout
+    DetailPanel.tsx   session and project detail rendering
+    ListView.tsx      scrollable list with a selection window
+    Panel.tsx         bordered panel with focus highlight
     ConfirmDialog.tsx, OutputOverlay.tsx, HelpBar.tsx
     useTerminalSize.ts
 ```
 
-Listing lives in `lib/` and is separate from the UI, so new actions (move, pack, unpack) can be added by extending `lib/clamp.ts` and wiring a keybinding in `App.tsx`.
+The `lib/` layer is UI-independent: every operation the TUI performs is a plain async function. New actions are added by writing a function in `lib/` and wiring a keybinding in `App.tsx`. The same layer backs the non-interactive commands (`list`, `doctor`), which keeps future packaging for other distribution channels (Homebrew, AUR) a matter of shipping the same Node entry point.
 
-## Environment variables
+## Supported platforms
 
-| Variable | Purpose |
-|----------|---------|
-| `LAZY_CLAMP_BIN` | path to the Clamp script to use |
-| `LAZY_CLAMP_CLAUDE_DIR` | Claude data directory, defaults to `~/.claude` (useful for tests) |
+| Platform | Status |
+|----------|--------|
+| Linux | primary target, developed and tested here |
+| macOS | expected to work, same POSIX layout |
+| Windows | designed for, not yet tested |
+
+All filesystem work uses Node.js APIs (`fs`, `path`, `os.homedir()`), path joins are separator-aware, and the path encoding handles `\` and `:` the same way Claude Code does on Windows. Cross-device moves fall back to copy-and-delete.
+
+## Roadmap
+
+- Move a project (relocate the directory and rewrite session references)
+- Fix references after a manual `mv`
+- Pack/unpack a project with its sessions into a portable archive
+- Search across session content
+- Bulk actions (archive or delete by age)
+
+## Credits
+
+Inspired by [LazyGit](https://github.com/jesseduffield/lazygit) for the interface model, and by [Clamp](https://github.com/wsagency/claude-move-project), whose approach to Claude Code's on-disk layout informed early versions of this project.
 
 ## License
 

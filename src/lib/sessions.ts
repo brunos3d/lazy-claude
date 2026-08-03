@@ -100,19 +100,35 @@ export async function listAllArchivedSessions(): Promise<SessionEntry[]> {
 
 /**
  * Move a session file into the archive tree. The archive lives outside
- * ~/.claude/projects so Claude Code and Clamp no longer see the session.
+ * the projects directory so Claude Code no longer sees the session.
  */
 export async function archiveSession(session: SessionEntry): Promise<void> {
   const destDir = path.join(archiveDir(), session.encoded);
   await fs.mkdir(destDir, { recursive: true });
-  await fs.rename(session.file, path.join(destDir, `${session.id}.jsonl`));
+  await moveFile(session.file, path.join(destDir, `${session.id}.jsonl`));
 }
 
-/** Move an archived session back into ~/.claude/projects. */
+/** Move an archived session back into the projects directory. */
 export async function restoreSession(session: SessionEntry): Promise<void> {
   const destDir = path.join(projectsDir(), session.encoded);
   await fs.mkdir(destDir, { recursive: true });
-  await fs.rename(session.file, path.join(destDir, `${session.id}.jsonl`));
+  await moveFile(session.file, path.join(destDir, `${session.id}.jsonl`));
+  try {
+    await fs.rmdir(path.dirname(session.file));
+  } catch {
+    // archive folder not empty; keep it
+  }
+}
+
+/** Rename with a copy-and-delete fallback for cross-device moves. */
+async function moveFile(from: string, to: string): Promise<void> {
+  try {
+    await fs.rename(from, to);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    await fs.copyFile(from, to);
+    await fs.rm(from);
+  }
 }
 
 /** Permanently delete a session file. */
@@ -124,17 +140,31 @@ const MAX_SCAN_RECORDS = 200;
 const MAX_MESSAGE_LENGTH = 400;
 
 /**
+ * Cheap read of the first records of a session file, enough to learn the
+ * recorded working directory. Used by project discovery to resolve session
+ * folders that have no history entry.
+ */
+export async function readSessionHead(file: string): Promise<{ cwd?: string }> {
+  const detail = await scanSessionFile(file, 25);
+  return { cwd: detail.cwd };
+}
+
+/**
  * Read the head of a session JSONL file and extract display metadata.
  * Session files can be huge, so only the first records are scanned.
  */
-export async function readSessionDetail(session: SessionEntry): Promise<SessionDetail> {
+export function readSessionDetail(session: SessionEntry): Promise<SessionDetail> {
+  return scanSessionFile(session.file, MAX_SCAN_RECORDS);
+}
+
+async function scanSessionFile(file: string, maxRecords: number): Promise<SessionDetail> {
   const detail: SessionDetail = { scannedRecords: 0 };
-  const stream = createReadStream(session.file, { encoding: 'utf8' });
+  const stream = createReadStream(file, { encoding: 'utf8' });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   try {
     for await (const line of rl) {
-      if (detail.scannedRecords >= MAX_SCAN_RECORDS) break;
+      if (detail.scannedRecords >= maxRecords) break;
       if (!line.trim()) continue;
       detail.scannedRecords += 1;
 

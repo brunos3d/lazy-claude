@@ -2,26 +2,26 @@
 import React from 'react';
 import { render } from 'ink';
 import { createRequire } from 'node:module';
-import { listProjects, resolveClamp, runClamp } from './lib/clamp.js';
+import { claudeDir, projectsDir } from './lib/paths.js';
+import { discoverProjects } from './lib/projects.js';
 import { App } from './ui/App.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
-const USAGE = `lazy-clamp ${version}: LazyGit-style TUI for Claude Code sessions
+const USAGE = `lazy-claude ${version}: a LazyGit-style TUI for Claude Code sessions
 
 Usage:
-  lazy-clamp            Open the TUI (also available as lzclamp)
-  lazy-clamp list       Print projects as JSON (via clamp --list --json)
-  lazy-clamp doctor     Show which clamp binary is used and basic checks
-  lazy-clamp --help     Show this help
-  lazy-clamp --version  Show version
+  lazy-claude           Open the TUI (also available as lzc)
+  lazy-claude list      Print discovered projects as JSON
+  lazy-claude doctor    Show data directory and discovery stats
+  lazy-claude --help    Show this help
+  lazy-claude --version Show version
 
 Environment:
-  LAZY_CLAMP_BIN         Path to the clamp script to use
-  LAZY_CLAMP_CLAUDE_DIR  Claude data dir (default: ~/.claude)
-
-Built on clamp: https://github.com/wsagency/claude-move-project`;
+  LAZY_CLAUDE_CLAUDE_DIR  Override the Claude data directory
+  CLAUDE_CONFIG_DIR       Respected when set (same variable Claude Code uses)
+                          Default: ~/.claude`;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -38,24 +38,21 @@ async function main() {
   const command = args[0];
 
   if (command === 'list') {
-    const projects = await listProjects();
+    const projects = await discoverProjects();
+    projects.sort((a, b) => b.lastActivity - a.lastActivity);
     console.log(JSON.stringify(projects, null, 2));
     return;
   }
 
   if (command === 'doctor') {
-    const clamp = resolveClamp();
-    console.log(`lazy-clamp ${version}`);
-    console.log(`clamp binary: ${clamp ?? 'NOT FOUND'}`);
-    if (clamp) {
-      const result = await runClamp(['--version']);
-      console.log(`clamp version: ${(result.stdout || result.stderr).trim()}`);
-    } else {
-      console.log(
-        'Set LAZY_CLAMP_BIN or install clamp (https://github.com/wsagency/claude-move-project).',
-      );
-      process.exitCode = 1;
-    }
+    console.log(`lazy-claude ${version}`);
+    console.log(`claude dir: ${claudeDir()}`);
+    console.log(`projects dir: ${projectsDir()}`);
+    const projects = await discoverProjects();
+    const sessions = projects.reduce((sum, p) => sum + p.sessions, 0);
+    const orphans = projects.filter((p) => p.orphaned).length;
+    console.log(`projects: ${projects.length} (${orphans} orphaned)`);
+    console.log(`sessions: ${sessions}`);
     return;
   }
 
@@ -67,12 +64,12 @@ async function main() {
   }
 
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
-    console.error('lazy-clamp needs an interactive terminal. Try `lazy-clamp list` instead.');
+    console.error('lazy-claude needs an interactive terminal. Try `lazy-claude list` instead.');
     process.exitCode = 1;
     return;
   }
 
-  // Switch to the alternate screen buffer for a fullscreen, lazygit-like feel.
+  // Switch to the alternate screen buffer for a fullscreen feel.
   process.stdout.write('\u001B[?1049h');
   const restoreScreen = () => process.stdout.write('\u001B[?1049l');
   process.on('exit', restoreScreen);

@@ -1,24 +1,24 @@
 {
-  "name": "lazy-clamp",
-  "version": "0.1.0",
-  "description": "LazyGit-style TUI for managing Claude Code sessions, built on top of Clamp",
+  "name": "lazy-claude",
+  "version": "0.2.0",
+  "description": "A LazyGit-style terminal UI for managing Claude Code sessions and project history",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/brunos3d/lazy-clamp.git"
+    "url": "git+https://github.com/brunos3d/lazy-claude.git"
   },
   "keywords": [
     "claude",
     "claude-code",
     "tui",
     "cli",
-    "clamp",
-    "sessions"
+    "sessions",
+    "terminal"
   ],
   "bin": {
-    "lazy-clamp": "dist/cli.js",
-    "lzclamp": "dist/cli.js"
+    "lazy-claude": "dist/cli.js",
+    "lzc": "dist/cli.js"
   },
   "files": [
     "dist"
