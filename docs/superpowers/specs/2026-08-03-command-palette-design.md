@@ -306,10 +306,22 @@ makes the palette usable from muscle memory. Each group is capped and shows
 a dim `+N more` line when truncated. Narrowing is done by typing, not by
 expanding a group.
 
-Visual separation from the action dialogs: `borderStyle="round"` with a blue
-accent instead of the cyan double border, and a tall input row with a `❯`
-prompt and an inverse cursor block. `Modal` currently hardcodes
-`borderStyle="double"`, so it gains a `borderStyle` prop.
+Visual separation from the action dialogs comes from the frame and the
+layout, not from special characters: `borderStyle="round"` with a blue
+accent instead of the cyan double border, and a taller input row with an
+inverse cursor block. `Modal` currently hardcodes `borderStyle="double"`,
+so it gains a `borderStyle` prop.
+
+The prompt is a plain `>`, the same one `InputDialog` uses. Modal rows pad
+their opaque background by counting characters, so a glyph that renders
+double-width in some locales (`❯` among them) would desync the padding and
+let the interface behind show through. Nothing inside a modal may use a
+character whose width is ambiguous across terminals.
+
+Result rows need per-character highlight markup, which `ModalLine`'s flat
+segments cannot express, so the palette renders them as its own `Text`.
+`Modal.tsx` exports `ROW_BACKGROUND` and `rowPadding` for that, keeping the
+opaque-row behaviour in one place without widening `ModalLine`'s API.
 
 Keys: up and down move through hits, enter jumps, esc closes, typing
 updates results live.
