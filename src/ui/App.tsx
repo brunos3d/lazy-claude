@@ -13,6 +13,12 @@ import { LABEL_FIELD, SearchService } from '../services/SearchService.js';
 import { SessionMetadataService, type SessionMetadata } from '../services/SessionMetadataService.js';
 import { ConversationService, type Conversation } from '../services/ConversationService.js';
 import {
+  LAUNCH_MODES,
+  LauncherService,
+  LaunchError,
+  type LaunchMode,
+} from '../services/LauncherService.js';
+import {
   archiveSession,
   deleteSession,
   listAllArchivedSessions,
@@ -77,6 +83,8 @@ Projects
   i              project info
 
 Sessions
+  e              resume the session in Claude Code
+  E              resume with --dangerously-skip-permissions (confirms first)
   a              archive session (reversible, hides it from Claude Code)
   r              restore an archived session
   d              delete session permanently
@@ -666,6 +674,53 @@ function AppShell({ initialProject }: AppProps) {
       .finally(() => setBusy(false));
   }, []);
 
+  /**
+   * Hand control to Claude Code. Everything is validated first so failures
+   * surface as a dialog rather than a broken exit, and the dangerous mode
+   * confirms before it leaves. The plan is recorded and the app exits; the
+   * CLI entry point spawns the child once the terminal is restored.
+   */
+  const launchSession = useCallback(
+    (mode: LaunchMode) => {
+      const session = selectedSession;
+      if (!session) return;
+      const projectPath =
+        selectedProject && !selectedProject.orphaned
+          ? selectedProject.path
+          : projectByEncoded.get(session.encoded);
+
+      setBusy(true);
+      LauncherService.prepare(session, projectPath, mode)
+        .then((plan) => {
+          setBusy(false);
+          const title = metadata.get(session.file)?.title ?? session.id;
+          const handOver = () => {
+            LauncherService.request(plan);
+            exit();
+          };
+          if (!mode.danger) {
+            handOver();
+            return;
+          }
+          open({
+            kind: 'confirm',
+            title: 'Resume without permission prompts',
+            danger: true,
+            message: `Resume "${title}" with --dangerously-skip-permissions?\n\nClaude Code will not ask before running commands or editing files in ${plan.cwd}.\n\n${plan.shell}`,
+            onResult: (ok) => {
+              if (ok) handOver();
+            },
+          });
+        })
+        .catch((error: Error) => {
+          setBusy(false);
+          const hint = error instanceof LaunchError && error.hint ? `\n\n${error.hint}` : '';
+          showOverlay('Cannot resume session', `${error.message}${hint}`);
+        });
+    },
+    [selectedSession, selectedProject, projectByEncoded, metadata, exit, open, showOverlay],
+  );
+
   const startPrune = useCallback(() => {
     setBusy(true);
     DiagnosticsService.pruneOrphans(true)
@@ -713,6 +768,27 @@ function AppShell({ initialProject }: AppProps) {
 
   const actions = useMemo<Action[]>(() => {
     const list: Action[] = [];
+
+    // Resuming is the most common thing to do after finding a session, so
+    // it leads the menu ahead of every management operation.
+    if (selectedSession) {
+      list.push(
+        {
+          key: 'e',
+          label: 'Resume session',
+          description: LAUNCH_MODES.resume.description,
+          run: () => launchSession(LAUNCH_MODES.resume),
+        },
+        {
+          key: 'E',
+          label: '! Resume, skip perms',
+          description: 'Resume with --dangerously-skip-permissions',
+          danger: true,
+          run: () => launchSession(LAUNCH_MODES.resumeDangerous),
+        },
+      );
+    }
+
     if (selectedProject) {
       list.push(
         {
@@ -835,6 +911,7 @@ function AppShell({ initialProject }: AppProps) {
   }, [
     selectedProject,
     selectedSession,
+    launchSession,
     startMove,
     startRepair,
     startPack,
@@ -1059,6 +1136,7 @@ function AppShell({ initialProject }: AppProps) {
       : focus === 'sessions'
         ? [
             ['↑↓', 'sessions'],
+            ['e', 'resume'],
             ['enter', 'details'],
             ['esc', 'projects'],
             ['x', 'actions'],

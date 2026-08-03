@@ -3,8 +3,10 @@ import React from 'react';
 import { render } from 'ink';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { runCommand } from './cli/commands.js';
+import { LauncherService } from './services/LauncherService.js';
 import { WorkspaceResolver } from './services/WorkspaceResolver.js';
 import { App } from './ui/App.js';
 
@@ -102,11 +104,36 @@ async function main() {
 
   // Switch to the alternate screen buffer for a fullscreen feel.
   process.stdout.write('\u001B[?1049h');
-  const restoreScreen = () => process.stdout.write('\u001B[?1049l');
+  let restored = false;
+  const restoreScreen = () => {
+    if (restored) return;
+    restored = true;
+    process.stdout.write('\u001B[?1049l');
+  };
   process.on('exit', restoreScreen);
 
   const { waitUntilExit } = render(<App initialProject={initialProject} />, { exitOnCtrlC: true });
   await waitUntilExit();
+
+  // Hand over to Claude Code when a session launch was requested. This runs
+  // after Ink unmounted and the alternate screen was restored, so the child
+  // inherits a clean terminal and Lazy Claude is fully out of the way.
+  const plan = LauncherService.takePending();
+  if (plan) {
+    restoreScreen();
+    console.log(`${plan.shell}\n`);
+    const result = spawnSync(plan.command, plan.args, {
+      stdio: 'inherit',
+      cwd: plan.cwd,
+      env: plan.env,
+    });
+    if (result.error) {
+      console.error(`Failed to launch Claude Code: ${result.error.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    process.exitCode = result.status ?? 0;
+  }
 }
 
 function expandHome(input: string): string {

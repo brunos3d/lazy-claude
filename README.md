@@ -10,6 +10,7 @@ Claude Code stores one folder per project under `~/.claude/projects/`, one JSONL
 - Rich session detail: message and tool-call counts, files touched and created, token usage, duration, model, Claude Code version, plus a conversation preview, an activity timeline, and a file list
 - Hierarchical navigation in the style of LazyGit: a project list and the selected project's sessions stay visible together, while the wide panel follows focus between project summary and session details
 - Contextual action menu (`x`) listing every available operation, including the ones currently unavailable and why
+- Resume a session in Claude Code (`e`), or resume with permission prompts skipped (`E`), handing the terminal over from the project's own directory
 - Fuzzy search (`/`) in both panels, fzf-style: `lz` finds `lazy-claude`, `vrt` finds `vortex-platform`, with matched characters highlighted and results ranked by match quality
 - Open straight into a workspace with `lazy-claude .` or `lazy-claude <path>`
 - Project discovery from `history.jsonl` plus session folder scanning, with recorded-cwd resolution for folders that have no history entry
@@ -88,6 +89,8 @@ Dialogs are overlays, not screens. The action menu, confirmations, pickers, and 
 | `i`               | project info                           |
 | `V`               | health check                           |
 | `P`               | prune orphaned session folders         |
+| `e`               | resume the session in Claude Code      |
+| `E`               | resume, skipping permission prompts    |
 | `a` / `r`         | archive / restore session              |
 | `d`               | delete session                         |
 | `c`               | check session integrity                |
@@ -151,6 +154,21 @@ Two built-ins touch this area, and they solve different problems. `/cd` changes 
 Use `/cd` for a single live session you are working in right now. Use Lazy Claude when relocating a repository together with its full history, or repairing one that already moved. There is no built-in bulk equivalent; the open request is [anthropics/claude-code#27473](https://github.com/anthropics/claude-code/issues/27473).
 
 One caveat worth stating plainly: this depends on an on-disk layout that is internal to Claude Code and changes between versions. `move`, `repair`, `remove`, and `unpack` back up `history.jsonl` first (unless `--no-backup`), but that backup does not include transcripts. For a full snapshot before a large change, run `lazy-claude pack`. See the [sessions documentation](https://code.claude.com/docs/en/sessions).
+
+## Resuming a session
+
+Finding a session is usually a prelude to continuing it, so the two resume actions lead the action menu ahead of every management operation. `e` resumes the highlighted session and `E` resumes it with `--dangerously-skip-permissions`, which asks for confirmation first and shows the exact command it will run.
+
+Both hand the terminal over rather than wrapping it: Lazy Claude unmounts, leaves the alternate screen, prints the shell equivalent, then executes Claude Code in the project's own directory with stdio inherited. What you get is the same as typing:
+
+```bash
+cd <project-directory>
+claude --resume <session-id>
+```
+
+Everything is validated before the interface exits, so a missing Claude Code executable, a project directory that has moved, a deleted session file, or an archived session (invisible to Claude Code until restored) each produce a dialog you can act on instead of a broken handoff. Set `LAZY_CLAUDE_CLAUDE_BIN` if `claude` is not on your `PATH`.
+
+Launch modes are data in `LauncherService`, contributing arguments, environment, and an optional command wrapper. Adding a read-only mode, a different model, or launching inside tmux means adding an entry there; the menu picks it up without UI changes.
 
 ## Fuzzy search
 
@@ -224,6 +242,7 @@ src/
     RepairService.ts           broken reference detection and relinking
     BackupService.ts           history.jsonl backup create/list/restore/delete
     PackService.ts             .claudepack pack/unpack
+    LauncherService.ts         resume handoff to Claude Code, launch modes
     DiagnosticsService.ts      health check, prune, doctor
     relocate.ts                shared folder-rename and history-rewrite logic
   ui/                    Ink components: App, panels, rows, detail tabs
