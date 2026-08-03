@@ -1,5 +1,5 @@
 {
-  "name": "lazy-claude",
+  "name": "lazy-claude-tui",
   "version": "1.0.0",
   "description": "🦞 A LazyGit-style terminal UI for managing Claude Code sessions and project history.",
   "type": "module",
