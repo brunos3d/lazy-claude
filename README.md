@@ -1,26 +1,41 @@
 # Lazy Claude
 
-A complete management application for Claude Code sessions and project history, with a LazyGit-style TUI and a fully scriptable CLI.
+Find and resume Claude Code sessions from the terminal, and keep the project data behind them healthy. A keyboard-driven TUI in the spirit of LazyGit, plus a CLI that exposes the same operations for scripts.
 
-Claude Code stores one folder per project under `~/.claude/projects/`, one JSONL file per session, and a `history.jsonl` index. That data breaks when projects move, accumulates orphans, and is hard to inspect by hand. Lazy Claude owns the whole problem: browsing, moving, repairing, backing up, packing, and cleaning, all implemented natively in TypeScript with no external CLI dependencies and no shell execution.
+Sessions pile up quickly. After a few weeks there are hundreds of them across dozens of projects, stored as UUID-named files, and Claude Code's own picker only lists the directory you are standing in. Lazy Claude reads the same metadata Claude Code writes, so every session shows its real title next to its branch, size, and age. Fuzzy search cuts hundreds down to a handful in three keystrokes, the inspector shows what a session actually did (messages, tool calls, files touched, a conversation preview, a timeline), and one key hands the terminal over to `claude --resume` in that project's directory.
+
+Moving a project breaks all of this, because Claude Code derives each storage path from the project's absolute path: a plain `mv` orphans every session that belonged to it. Lazy Claude owns that problem too. It moves projects with their history intact, including nested sub-projects and worktrees, repairs references after a move that already happened, archives and prunes what you no longer need, packs a project and its sessions into a portable archive, and backs up the history index before every change. It is native TypeScript throughout, with no shell-outs and no dependency on other tools.
 
 ## Features
 
-- Sessions listed by their real title, the same one Claude Code's resume picker shows, with the id, age, size, and git branch as secondary facts
-- Rich session detail: message and tool-call counts, files touched and created, token usage, duration, model, Claude Code version, plus a conversation preview, an activity timeline, and a file list
-- Hierarchical navigation in the style of LazyGit: a project list and the selected project's sessions stay visible together, while the wide panel follows focus between project summary and session details
-- One action palette (`x`) holding every operation, grouped into Session, Project, Maintenance and Dangerous, adapting to the focused panel and listing unavailable actions with the reason
-- Resume a session in Claude Code (`e`), or resume with permission prompts skipped (`E`), handing the terminal over from the project's own directory
+Finding and resuming
+
+- Sessions listed by their real title, the same one Claude Code's resume picker shows, with branch, age, and size beside them
 - Fuzzy search (`/`) in both panels, fzf-style: `lz` finds `lazy-claude`, `vrt` finds `vortex-platform`, with matched characters highlighted and results ranked by match quality
+- Resume in Claude Code (`e`), or resume with permission prompts skipped (`E`), handing the terminal over from the project's own directory
 - Open straight into a workspace with `lazy-claude .` or `lazy-claude <path>`
-- Project discovery from `history.jsonl` plus session folder scanning, with recorded-cwd resolution for folders that have no history entry
+
+Understanding a session
+
+- Message and tool-call counts, files touched and created, token usage, duration, model, and Claude Code version
+- Conversation preview, activity timeline, and file list, across four inspector tabs
+- Integrity check that validates every record in a session file
+
+Managing the data
+
 - Move a project: relocates the directory and migrates every reference, including nested sub-project and worktree session folders, archived sessions, and history entries, with automatic rollback on failure
 - Repair references after a manual `mv`: auto-detects broken entries, searches likely new locations, and relinks explicitly or interactively
 - Archive, restore, and delete individual sessions
 - Pack a project with its sessions into a portable `.claudepack` archive; unpack rewrites paths for the new machine or location
-- Timestamped `history.jsonl` backups before every mutation, with a backup manager to create, restore, and delete them
+- Timestamped `history.jsonl` backups before every mutation, with a manager to create, restore, and delete them
 - Health check and prune for orphaned session folders
 - Dry-run mode on every destructive operation
+
+Interface
+
+- Hierarchical navigation in the style of LazyGit: the project list and the selected project's sessions stay visible together, while the wide panel follows focus
+- One action palette (`x`) holding every operation, grouped into Session, Project, Maintenance, and Dangerous, adapting to the focused panel and listing unavailable actions with the reason
+- Dialogs render as overlays over the interface rather than replacing it, and stack
 
 ## Installation
 

@@ -13,7 +13,7 @@ import { App } from './ui/App.js';
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
-const USAGE = `lazy-claude ${version}: a LazyGit-style manager for Claude Code sessions
+const USAGE = `lazy-claude ${version}: find, resume and manage Claude Code sessions
 
 Usage:
   lazy-claude                          Open the TUI

@@ -1,7 +1,7 @@
 {
   "name": "lazy-claude",
-  "version": "0.8.0",
-  "description": "A LazyGit-style terminal UI for managing Claude Code sessions and project history",
+  "version": "1.0.0",
+  "description": "Find, resume and manage Claude Code sessions from the terminal: a LazyGit-style TUI plus a full CLI",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -11,10 +11,15 @@
   "keywords": [
     "claude",
     "claude-code",
+    "claude-code-sessions",
     "tui",
     "cli",
-    "sessions",
-    "terminal"
+    "terminal",
+    "session-manager",
+    "resume",
+    "lazygit",
+    "fuzzy-search",
+    "ink"
   ],
   "bin": {
     "lazy-claude": "dist/cli.js",
