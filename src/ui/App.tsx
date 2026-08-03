@@ -48,6 +48,14 @@ import { OverlayProvider, useAppInput, useOverlays } from './overlay/OverlayCont
 import { OverlayHost } from './overlay/OverlayHost.js';
 import { buildActionCategories, findShortcut } from './actions/registry.js';
 import { FOCUS_ORDER, type Focus, type ProjectItem } from './types.js';
+import { SearchIndexer } from '../services/search/SearchIndexer.js';
+import { registerDefaultProviders } from '../services/search/register.js';
+import { KEYS } from './keys.js';
+import { pendingKey, useJumpTarget, type JumpActions } from './useJumpTarget.js';
+
+// Providers are process-wide, so registration happens once at load rather
+// than on every mount of the palette.
+registerDefaultProviders();
 
 /**
  * Actions that keep a global shortcut. These act on the highlighted item
@@ -75,11 +83,19 @@ Navigation
   enter          focus the session list for the selected project
   esc            step back up (Details to Sessions to Projects)
   /              search the focused list
+  ctrl+k         command palette: search every project and session
   x              contextual action menu
 
 Details panel
   tab or 1..4    switch tab (overview, conversation, timeline, files)
   J / K          scroll
+
+Command palette (ctrl+k)
+  Searches the whole workspace, not just the focused list. Results are
+  grouped into Projects and Sessions; enter jumps straight to one, which
+  selects its project, loads its sessions, and highlights it. Recent
+  searches appear when the input is empty. This is navigation only:
+  operations stay in the action palette (x).
 
 Actions (x)
   Every operation lives in the action palette, grouped into Session,
@@ -132,6 +148,7 @@ function AppShell({ initialProject }: AppProps) {
   const [sessionIndex, setSessionIndex] = useState(0);
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<Map<string, SessionMetadata>>(new Map());
   const [showArchived, setShowArchived] = useState(false);
   const [conversation, setConversation] = useState<Conversation | null>(null);
@@ -161,6 +178,10 @@ function AppShell({ initialProject }: AppProps) {
         if (cancelled) return;
         list.sort((a, b) => b.lastActivity - a.lastActivity);
         setProjects(list);
+        // Reuse the discovery that just ran instead of scanning twice, and
+        // build in the background so opening the palette never waits.
+        SearchIndexer.invalidate();
+        void SearchIndexer.warm(list);
       })
       .catch((error: Error) => {
         if (!cancelled) setLoadError(error.message);
@@ -233,6 +254,11 @@ function AppShell({ initialProject }: AppProps) {
       .then(async (list) => {
         if (cancelled) return;
         setSessions(list);
+        setLoadedKey(
+          selectedItem?.kind === 'project'
+            ? pendingKey(selectedItem.project.encoded, showArchived)
+            : null,
+        );
         setSessionIndex((i) => Math.min(i, Math.max(0, list.length - 1)));
         setSessionsLoading(false);
         const meta = await SessionMetadataService.getMany(list);
@@ -820,11 +846,50 @@ function AppShell({ initialProject }: AppProps) {
     ],
   );
 
+  // Setters from useState are stable, so this object never has to change
+  // and the jump effect does not re-run on every render.
+  const jumpActions = useMemo<JumpActions>(
+    () => ({
+      setProjectIndex,
+      setSessionIndex,
+      setFocus,
+      setShowArchived,
+      setProjectQuery,
+      setSessionQuery,
+      setSearching,
+      setDetailTab,
+      setDetailScroll,
+      setStatus,
+    }),
+    [],
+  );
+
+  const jumpTo = useJumpTarget({
+    items: allProjectItems,
+    sessions: visibleSessions,
+    sessionsLoading,
+    loadedKey,
+    actions: jumpActions,
+  });
+
+  const openPalette = useCallback(
+    () => open({ kind: 'palette', onSelect: jumpTo }),
+    [open, jumpTo],
+  );
+
   // ---- Keyboard --------------------------------------------------------
 
   // Panels only listen while no overlay is open and nothing is running.
   useAppInput(
     (input, key) => {
+      // Before everything, including the search branch: the palette is
+      // global, and the navigation below treats a bare "k" as "move up"
+      // without checking key.ctrl.
+      if (KEYS.commandPalette.matches(input, key)) {
+        openPalette();
+        return;
+      }
+
       // While typing a query the panel keeps arrow navigation, so a match
       // can be selected without leaving search mode.
       if (searching) {
@@ -1024,6 +1089,7 @@ function AppShell({ initialProject }: AppProps) {
           ['enter', 'sessions'],
           ['tab', 'panel'],
           ['/', 'search'],
+          [KEYS.commandPalette.label, 'go to'],
           ['x', 'actions'],
           ['?', 'help'],
           ['q', 'quit'],
@@ -1035,6 +1101,7 @@ function AppShell({ initialProject }: AppProps) {
             ['enter', 'details'],
             ['esc', 'back'],
             ['/', 'search'],
+            [KEYS.commandPalette.label, 'go to'],
             ['x', 'actions'],
             ['?', 'help'],
             ['q', 'quit'],
@@ -1043,6 +1110,7 @@ function AppShell({ initialProject }: AppProps) {
             ['↑↓', 'scroll'],
             ['tab', 'next tab'],
             ['1-4', 'tab'],
+            [KEYS.commandPalette.label, 'go to'],
             ['esc', 'sessions'],
             ['x', 'actions'],
             ['?', 'help'],
