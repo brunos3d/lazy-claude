@@ -1,7 +1,7 @@
 {
   "name": "lazy-claude",
   "version": "1.0.0",
-  "description": "Find, resume and manage Claude Code sessions from the terminal: a LazyGit-style TUI plus a full CLI",
+  "description": "🦞 A LazyGit-style terminal UI for managing Claude Code sessions and project history.",
   "type": "module",
   "license": "MIT",
   "repository": {
