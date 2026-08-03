@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import os from 'node:os';
 import path from 'node:path';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp } from 'ink';
 import { DiscoveryService, type Project } from '../services/DiscoveryService.js';
 import { DiagnosticsService } from '../services/DiagnosticsService.js';
 import { ProjectService } from '../services/ProjectService.js';
@@ -28,12 +28,13 @@ import { HelpBar } from './HelpBar.js';
 import { ListView } from './ListView.js';
 import { Panel } from './Panel.js';
 import { SearchRow } from './SearchRow.js';
-import { ActionMenu, type Action } from './ActionMenu.js';
 import { AllSessionsRow, ProjectRow, SessionRow } from './rows.js';
 import { DETAIL_TABS, SessionDetail, type DetailTab } from './SessionDetail.js';
 import { ProjectDetail } from './ProjectDetail.js';
 import { useTerminalSize } from './useTerminalSize.js';
-import { ConfirmDialog, InputDialog, OverlayView, SelectDialog, type Modal } from './modals.js';
+import { OverlayProvider, useAppInput, useOverlays } from './overlay/OverlayContext.js';
+import { OverlayHost } from './overlay/OverlayHost.js';
+import type { Action } from './overlay/dialogs.js';
 
 /** Which panel owns the keyboard. Tab cycles through them in this order. */
 type Focus = 'projects' | 'sessions' | 'details';
@@ -103,8 +104,21 @@ function expandHome(input: string): string {
   return input;
 }
 
-export function App({ initialProject }: AppProps) {
+/**
+ * Root: the application tree stays mounted at all times and the overlay
+ * host renders above it, so dialogs never replace the interface.
+ */
+export function App(props: AppProps) {
+  return (
+    <OverlayProvider>
+      <AppShell {...props} />
+    </OverlayProvider>
+  );
+}
+
+function AppShell({ initialProject }: AppProps) {
   const { exit } = useApp();
+  const { open, idle } = useOverlays();
   const { columns, rows } = useTerminalSize();
   const home = os.homedir();
 
@@ -125,19 +139,15 @@ export function App({ initialProject }: AppProps) {
   const [projectQuery, setProjectQuery] = useState('');
   const [sessionQuery, setSessionQuery] = useState('');
   const [searching, setSearching] = useState(false);
-  const [modals, setModals] = useState<Modal[]>([]);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [status, setStatus] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [autoOpened, setAutoOpened] = useState(false);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
-  const push = useCallback((modal: Modal) => setModals((s) => [...s, modal]), []);
-  const pop = useCallback(() => setModals((s) => s.slice(0, -1)), []);
   const showOverlay = useCallback(
-    (title: string, body: string) => setModals([{ kind: 'overlay', title, body }]),
-    [],
+    (title: string, body: string) => open({ kind: 'output', title, body }),
+    [open],
   );
 
   useEffect(() => {
@@ -294,24 +304,22 @@ export function App({ initialProject }: AppProps) {
 
   const startMove = useCallback(
     (project: Project) => {
-      push({
+      open({
         kind: 'input',
         title: 'Move project',
         label: `New location for ${project.path}. An existing directory moves the project into it; ~ expands to home.`,
         onResult: (value) => {
-          pop();
           if (!value) return;
           const destination = expandHome(value);
           setBusy(true);
           MoveService.move({ source: project.path, destination, parents: true, dryRun: true })
             .then((plan) => {
               setBusy(false);
-              push({
+              open({
                 kind: 'confirm',
                 title: 'Confirm move',
                 message: plan.steps.join('\n'),
                 onResult: (ok) => {
-                  pop();
                   if (!ok) return;
                   runOp('Move project', async () => {
                     const report = await MoveService.move({
@@ -331,18 +339,17 @@ export function App({ initialProject }: AppProps) {
         },
       });
     },
-    [pop, push, runOp, showOverlay],
+    [open, runOp, showOverlay],
   );
 
   const startRemove = useCallback(
     (project: Project) => {
-      push({
+      open({
         kind: 'confirm',
         title: 'Remove project',
         danger: true,
         message: `Permanently delete ${project.path}?\n\nThis removes the project directory, ${project.sessions} session file(s), archived sessions, and all history entries. A history.jsonl backup is created first, but project files are NOT recoverable.`,
         onResult: (ok) => {
-          pop();
           if (!ok) return;
           runOp('Remove project', async () => {
             const report = await ProjectService.remove({ path: project.path });
@@ -351,18 +358,17 @@ export function App({ initialProject }: AppProps) {
         },
       });
     },
-    [pop, push, runOp],
+    [open, runOp],
   );
 
   const startPack = useCallback(
     (project: Project) => {
-      push({
+      open({
         kind: 'input',
         title: 'Pack project',
         label: `Archive path for ${project.path}`,
         initial: path.join(os.homedir(), `${path.basename(project.path)}.claudepack`),
         onResult: (value) => {
-          pop();
           if (!value) return;
           runOp('Pack project', async () => {
             const report = await PackService.pack({
@@ -374,32 +380,29 @@ export function App({ initialProject }: AppProps) {
         },
       });
     },
-    [pop, push, runOp],
+    [open, runOp],
   );
 
   const startUnpack = useCallback(() => {
-    push({
+    open({
       kind: 'input',
       title: 'Unpack archive',
       label: 'Path to the .claudepack archive',
       onResult: (archiveValue) => {
-        pop();
         if (!archiveValue) return;
         const archive = expandHome(archiveValue);
-        push({
+        open({
           kind: 'input',
           title: 'Unpack destination',
           label: 'Directory to restore the project to (must not exist yet)',
           onResult: (destValue) => {
-            pop();
             if (!destValue) return;
             const destination = expandHome(destValue);
-            push({
+            open({
               kind: 'confirm',
               title: 'Confirm unpack',
               message: `Restore ${archive}\n  -> ${destination}\n\nSessions and history entries are rewritten for the new location.`,
               onResult: (ok) => {
-                pop();
                 if (!ok) return;
                 runOp('Unpack archive', async () => {
                   const report = await PackService.unpack({ archive, destination, parents: true });
@@ -411,7 +414,7 @@ export function App({ initialProject }: AppProps) {
         });
       },
     });
-  }, [pop, push, runOp]);
+  }, [open, runOp]);
 
   const repairTo = useCallback(
     (from: string, to: string) => {
@@ -423,12 +426,11 @@ export function App({ initialProject }: AppProps) {
             showOverlay('Repair', plan.steps.join('\n'));
             return;
           }
-          push({
+          open({
             kind: 'confirm',
             title: 'Confirm repair',
             message: plan.steps.join('\n'),
             onResult: (ok) => {
-              pop();
               if (!ok) return;
               runOp('Repair references', async () => {
                 const report = await RepairService.repair({ from, to });
@@ -442,7 +444,7 @@ export function App({ initialProject }: AppProps) {
           showOverlay('Repair failed', error.message);
         });
     },
-    [pop, push, runOp, showOverlay],
+    [open, runOp, showOverlay],
   );
 
   const chooseRepairTarget = useCallback(
@@ -453,20 +455,18 @@ export function App({ initialProject }: AppProps) {
         .then((candidates) => {
           setBusy(false);
           const MANUAL = 'Enter the new path manually…';
-          push({
-            kind: 'select',
+          open({
+            kind: 'picker',
             title: `Where does ${path.basename(from)} live now?`,
             options: [...candidates, MANUAL],
             onResult: (value) => {
-              pop();
               if (!value) return;
               if (value === MANUAL) {
-                push({
+                open({
                   kind: 'input',
                   title: 'New project location',
                   label: `Current path of the project previously at ${from}`,
                   onResult: (manual) => {
-                    pop();
                     if (!manual) return;
                     repairTo(from, expandHome(manual));
                   },
@@ -478,7 +478,7 @@ export function App({ initialProject }: AppProps) {
           });
         });
     },
-    [pop, push, repairTo],
+    [open, repairTo],
   );
 
   const startRepair = useCallback(() => {
@@ -491,17 +491,16 @@ export function App({ initialProject }: AppProps) {
       chooseRepairTarget(selectedProject.path);
       return;
     }
-    push({
-      kind: 'select',
+    open({
+      kind: 'picker',
       title: `Broken references (${broken.length})`,
       options: broken.map((p) => p.path),
       onResult: (value) => {
-        pop();
         if (!value) return;
         chooseRepairTarget(value);
       },
     });
-  }, [projects, selectedProject, chooseRepairTarget, pop, push, showOverlay]);
+  }, [projects, selectedProject, chooseRepairTarget, open, showOverlay]);
 
   const startBackups = useCallback(() => {
     setBusy(true);
@@ -509,8 +508,8 @@ export function App({ initialProject }: AppProps) {
       .then((backups: Backup[]) => {
         setBusy(false);
         const CREATE = 'Create a new backup now';
-        push({
-          kind: 'select',
+        open({
+          kind: 'picker',
           title: `History backups (${backups.length})`,
           options: [
             CREATE,
@@ -519,7 +518,6 @@ export function App({ initialProject }: AppProps) {
             ),
           ],
           onResult: (value, index) => {
-            pop();
             if (value === null) return;
             if (index === 0) {
               runOp('Create backup', async () => {
@@ -529,20 +527,18 @@ export function App({ initialProject }: AppProps) {
               return;
             }
             const backup = backups[index - 1];
-            push({
-              kind: 'select',
+            open({
+              kind: 'picker',
               title: backup.name,
               options: ['Restore this backup', 'Delete this backup'],
               onResult: (action) => {
-                pop();
                 if (!action) return;
                 if (action.startsWith('Restore')) {
-                  push({
+                  open({
                     kind: 'confirm',
                     title: 'Restore backup',
                     message: `Replace history.jsonl with ${backup.name}? The current state is backed up first.`,
                     onResult: (ok) => {
-                      pop();
                       if (!ok) return;
                       runOp('Restore backup', async () => {
                         const { preRestoreBackup } = await BackupService.restore(backup.file);
@@ -555,13 +551,12 @@ export function App({ initialProject }: AppProps) {
                     },
                   });
                 } else {
-                  push({
+                  open({
                     kind: 'confirm',
                     title: 'Delete backup',
                     danger: true,
                     message: `Delete ${backup.name}? This cannot be undone.`,
                     onResult: (ok) => {
-                      pop();
                       if (!ok) return;
                       runOp('Delete backup', async () => {
                         await BackupService.delete(backup.file);
@@ -579,7 +574,7 @@ export function App({ initialProject }: AppProps) {
         setBusy(false);
         showOverlay('Backups', error.message);
       });
-  }, [pop, push, runOp, showOverlay]);
+  }, [open, runOp, showOverlay]);
 
   const showInfo = useCallback(
     (project: Project) => {
@@ -631,13 +626,12 @@ export function App({ initialProject }: AppProps) {
           danger: true,
         },
       }[kind];
-      push({
+      open({
         kind: 'confirm',
         title: spec.title,
         message: spec.message,
         danger: spec.danger,
         onResult: (ok) => {
-          pop();
           if (!ok) return;
           setBusy(true);
           const run =
@@ -656,7 +650,7 @@ export function App({ initialProject }: AppProps) {
         },
       });
     },
-    [metadata, pop, push, refresh],
+    [metadata, open, refresh],
   );
 
   const checkSession = useCallback((session: SessionEntry) => {
@@ -681,13 +675,12 @@ export function App({ initialProject }: AppProps) {
           showOverlay('Prune', preview.text);
           return;
         }
-        push({
+        open({
           kind: 'confirm',
           title: 'Prune orphaned session folders',
           danger: true,
           message: preview.text,
           onResult: (ok) => {
-            pop();
             if (!ok) return;
             runOp('Prune', async () => (await DiagnosticsService.pruneOrphans(false)).steps);
           },
@@ -697,7 +690,7 @@ export function App({ initialProject }: AppProps) {
         setBusy(false);
         showOverlay('Prune failed', error.message);
       });
-  }, [pop, push, runOp, showOverlay]);
+  }, [open, runOp, showOverlay]);
 
   const runDiagnostics = useCallback(() => {
     setBusy(true);
@@ -860,9 +853,8 @@ export function App({ initialProject }: AppProps) {
 
   // ---- Keyboard --------------------------------------------------------
 
-  const inputActive = modals.length === 0 && !menuOpen && !busy;
-
-  useInput(
+  // Panels only listen while no overlay is open and nothing is running.
+  useAppInput(
     (input, key) => {
       // While typing a query the panel keeps arrow navigation, so a match
       // can be selected without leaving search mode.
@@ -911,7 +903,11 @@ export function App({ initialProject }: AppProps) {
         return;
       }
       if (input === 'x') {
-        setMenuOpen(true);
+        open({
+          kind: 'actions',
+          title: focus === 'projects' ? 'Project actions' : 'Session actions',
+          actions,
+        });
         return;
       }
       if (input === '/') {
@@ -1017,7 +1013,7 @@ export function App({ initialProject }: AppProps) {
       else if (key.downArrow || input === 'j') setDetailScroll((s) => s + 1);
       else if (key.leftArrow || input === 'h') setFocus('sessions');
     },
-    { isActive: inputActive },
+    !busy,
   );
 
   // ---- Layout ----------------------------------------------------------
@@ -1082,59 +1078,12 @@ export function App({ initialProject }: AppProps) {
             ['q', 'quit'],
           ];
 
-  const topModal = modals[modals.length - 1] ?? null;
-
-  if (topModal) {
-    return (
-      <Box flexDirection="column" width={columns} height={rows}>
-        {topModal.kind === 'overlay' ? (
-          <OverlayView modal={topModal} active={!busy} width={columns} height={mainHeight} onClose={pop} />
-        ) : (
-          <Box
-            width={columns}
-            height={mainHeight}
-            alignItems="center"
-            justifyContent="center"
-            flexDirection="column"
-          >
-            {topModal.kind === 'confirm' ? (
-              <ConfirmDialog modal={topModal} active={!busy} />
-            ) : topModal.kind === 'input' ? (
-              <InputDialog key={modals.length} modal={topModal} active={!busy} />
-            ) : (
-              <SelectDialog key={modals.length} modal={topModal} active={!busy} />
-            )}
-          </Box>
-        )}
-        <HelpBar bindings={bindings} status={busy ? 'Working…' : status} />
-      </Box>
-    );
-  }
-
-  if (menuOpen) {
-    return (
-      <Box flexDirection="column" width={columns} height={rows}>
-        <Box
-          width={columns}
-          height={mainHeight}
-          alignItems="center"
-          justifyContent="center"
-          flexDirection="column"
-        >
-          <ActionMenu
-            title={focus === 'projects' ? 'Project actions' : 'Session actions'}
-            actions={actions}
-            active
-            onClose={() => setMenuOpen(false)}
-          />
-        </Box>
-        <HelpBar bindings={bindings} status={busy ? 'Working…' : status} />
-      </Box>
-    );
-  }
+  const rootWidth = columns;
 
   return (
-    <Box flexDirection="column" width={columns} height={rows}>
+    // position relative: the positioning context the overlay host
+    // absolutely positions itself against.
+    <Box position="relative" flexDirection="column" width={rootWidth} height={rows}>
       <Box height={mainHeight}>
         {/* Left column: projects on top, that project's sessions below. */}
         <Box flexDirection="column" width={leftWidth} flexShrink={0}>
@@ -1274,6 +1223,9 @@ export function App({ initialProject }: AppProps) {
         </Box>
       </Box>
       <HelpBar bindings={bindings} status={busy ? 'Working…' : status} />
+
+      {/* Last sibling: Ink composites in order, so overlays draw on top. */}
+      <OverlayHost />
     </Box>
   );
 }

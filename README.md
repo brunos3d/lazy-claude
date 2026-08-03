@@ -67,6 +67,8 @@ Focus moves with `tab` (Projects, Sessions, Details), `enter` to step down, and 
 
 Press `x` anywhere for the action menu, which lists every operation available for the current selection. The shortcuts below also work directly.
 
+Dialogs are overlays, not screens. The action menu, confirmations, pickers, and reports draw on top of the interface while the panels stay visible and keep their selection, so closing a dialog returns you exactly where you were. Only the top dialog receives keys; the panels underneath are inert until it closes. Dialogs stack, so a confirmation raised from a picker layers over it.
+
 | Key              | Action                                        |
 | ---------------- | --------------------------------------------- |
 | `↑`/`k`, `↓`/`j` | move within the focused panel                 |
@@ -224,8 +226,15 @@ src/
     PackService.ts             .claudepack pack/unpack
     DiagnosticsService.ts      health check, prune, doctor
     relocate.ts                shared folder-rename and history-rewrite logic
-  ui/                    Ink components: App, panels, rows, modals, menus
+  ui/                    Ink components: App, panels, rows, detail tabs
+    overlay/
+      OverlayContext.tsx   overlay stack, plus the input-gating hooks
+      OverlayHost.tsx      renders the stack as the last root sibling
+      Modal.tsx            absolutely positioned, opaque modal frame
+      dialogs.tsx          confirm, input, picker, output, action menu
 ```
+
+The overlay system is one place, not one implementation per dialog. `OverlayProvider` holds a stack, `OverlayHost` renders it as the final sibling of a `position="relative"` root (Ink composites siblings in order, which is what puts dialogs on top), and `Modal` paints every interior line as a full-width `Text` with a background colour so the UI behind cannot bleed through. Input is gated centrally: `useOverlayInput` only fires for the top overlay and `useAppInput` only fires when the stack is empty. A new dialog type means adding a spec to the union and a case to the host.
 
 The UI contains no parsing or business logic. Every record shape Claude Code writes is understood in exactly one place: `SessionMetadataService` for cheap per-session facts and `ConversationService` for the deep pass. Both the CLI commands and the TUI flows call the same services, so a new operation means adding a service function, a command, and an entry in the action menu.
 
