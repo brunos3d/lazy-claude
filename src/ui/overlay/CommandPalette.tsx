@@ -194,7 +194,14 @@ export function CommandPalette({
   }, [rowList]);
 
   const modalHeight = Math.max(tiny ? 6 : 8, Math.floor(terminalRows * 0.6));
-  const viewport = Math.max(1, Math.min(rowList.length, modalHeight - chrome));
+  // Bounded by the real terminal budget as well as modalHeight: modalHeight
+  // alone is not monotonic across the tiny/compact thresholds (chrome steps
+  // 5 -> 7 -> 9 there), so without this a taller terminal could otherwise
+  // show fewer result rows than a shorter one.
+  const viewport = Math.max(
+    1,
+    Math.min(rowList.length, terminalRows - chrome, Math.max(3, modalHeight - chrome)),
+  );
 
   const resolveOffset = (base: number, pick: number) => {
     const row = rowOfPick[pick] ?? 0;
@@ -225,6 +232,15 @@ export function CommandPalette({
     setScroll((s) => resolveOffset(s, clamped));
   };
 
+  // picks can shrink out from under the selection: a rescan re-runs the
+  // search effect (it depends on snapshot) and SearchIndexer.build() wipes
+  // sessions back to empty at the start of a rebuild, so an index that
+  // pointed at a valid hit a moment ago can point past the end of the new,
+  // shorter list. Clamping on read (rather than only in select()) keeps a
+  // row selected and enter functional through that window, instead of
+  // waiting for the next arrow key to recover.
+  const active = Math.min(index, Math.max(0, picks.length - 1));
+
   useOverlayInput(overlay.id, (input, key) => {
     if (key.escape) {
       onClose();
@@ -249,7 +265,7 @@ export function CommandPalette({
       return;
     }
     if (key.return) {
-      const choice = picks[index];
+      const choice = picks[active];
       if (!choice) return;
       if (choice.kind === 'recent') {
         setQuery(choice.query);
@@ -282,7 +298,7 @@ export function CommandPalette({
     }
   });
 
-  const offset = resolveOffset(scroll, index);
+  const offset = resolveOffset(scroll, active);
   const rule = (
     <ModalLine
       width={width}
@@ -326,7 +342,7 @@ export function CommandPalette({
       }
 
       case 'recent': {
-        const selected = row.pick === index;
+        const selected = row.pick === active;
         return (
           <ModalLine
             key={key}
@@ -340,11 +356,11 @@ export function CommandPalette({
       }
 
       case 'hit':
-        return <HitLine key={key} hit={row.hit} selected={row.pick === index} width={width} />;
+        return <HitLine key={key} hit={row.hit} selected={row.pick === active} width={width} />;
     }
   };
 
-  const counter = rowList.length > viewport && picks.length > 0 ? `${index + 1}/${picks.length}` : '';
+  const counter = rowList.length > viewport && picks.length > 0 ? `${active + 1}/${picks.length}` : '';
   const indexing =
     snapshot.status !== 'ready' && snapshot.total > 0
       ? `indexing ${snapshot.done}/${snapshot.total}`
