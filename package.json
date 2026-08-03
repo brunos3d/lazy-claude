@@ -28,9 +28,10 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/chmod-bin.mjs",
     "dev": "tsc --watch",
     "start": "node dist/cli.js",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
