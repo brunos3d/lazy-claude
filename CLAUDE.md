@@ -8,10 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run build     # tsc + restore the executable bit on dist/cli.js
 npm run dev       # tsc --watch
 npm start         # node dist/cli.js
+npm test          # tsc, then node --test over the compiled output
 npm link          # expose `lazy-claude` and `lzc` globally from this checkout
 ```
 
-There is no test runner, linter, or formatter configured. `tsc` under `strict` is the only automated check, so run `npm run build` after changes.
+There is no linter or formatter configured. Tests use Node's built-in runner with no dependencies: sources and `*.test.ts` files sit side by side under `src/`, and `npm test` compiles then runs `node --test 'dist/**/*.test.js'`. Run it after changes; `tsc` under `strict` is still the type check.
+
+The quoted glob is deliberate. Node 22 stopped recursively scanning a bare directory passed to `--test`, so `node --test dist` now fails, and Node resolves the quoted pattern itself rather than the shell. Running the tests therefore needs Node 21 or newer, while the published CLI still supports the Node 18 floor in `engines`.
+
+Tests cover the pure layers only: ranking, the search engine, the workspace indexer, providers, jump planning, and overlay windowing. Ink components are verified by building and driving the real TUI.
 
 After every build, `scripts/chmod-bin.mjs` chmods `dist/cli.js` to 0755. tsc writes 0644, which breaks an already-linked `lazy-claude`/`lzc`. Do not drop that step from the build script.
 
@@ -61,6 +66,26 @@ Dialogs are data, not screens. `OverlayProvider` holds a stack; `OverlayHost` re
 Input gating is central and non-negotiable: `useOverlayInput(id, ...)` fires only for the top overlay, `useAppInput(...)` only when the stack is empty. Never call Ink's `useInput` directly in app or dialog components.
 
 A new dialog type means adding a spec to the `OverlaySpec` union in `OverlayContext.tsx` and a case in `OverlayHost`.
+
+### Global search and the command palette
+
+`ctrl+k` opens a palette that searches every project and session, separate from the per-panel `/` search. It navigates and nothing else; operations stay in the action palette (`x`).
+
+`src/services/search/` holds the whole engine and imports no UI:
+
+- `SearchIndexer` owns data. One in-memory `WorkspaceIndex` covering every project and every session, live and archived, built in the background from the discovery App already ran. Opening the palette must never trigger indexing and never wait for it; it searches whatever is ready. Builds are generation-stamped so a rescan mid-build discards the stale result instead of publishing over the fresh one.
+- `SearchEngine` owns orchestration: the `SearchContext`, the `AbortController` that cancels a superseded query, per-provider failure isolation, group caps, and `GROUP_ORDER`. Group ordering lives here, not on providers, so the same query always puts the same kind of result in the same place.
+- Providers own matching, one domain each, and are stateless and mutually independent. They delegate to `SearchService` so there stays exactly one fuzzy implementation.
+
+Adding a searchable entity means writing a provider, registering it in `register.ts`, adding its `ResultKind` to `GROUP_ORDER`, and, if it navigates somewhere new, a `JumpTarget` variant plus a case in `useJumpTarget`. Nothing in `CommandPalette` or `SearchEngine` changes.
+
+`ConversationProvider` ships registered and disabled. Turning message search on is implementing that one file.
+
+Ranking tiers live in `FilterService` and are shared: exact beats prefix beats substring beats subsequence, with the fuzzy score breaking ties inside a tier. The panel searches get this too.
+
+Jumping is two steps, because selecting a project starts an asynchronous session load. `useJumpTarget` applies what is immediate, then holds the target session file until the matching list arrives, keyed on `encoded|archived` so a jump into the archive never resolves against the live list.
+
+All global keybindings live in `src/ui/keys.ts`. The palette check must run before everything else in `useAppInput`, including the search branch: the navigation below it treats a bare `k` as "move up" without checking `key.ctrl`.
 
 ### UI layout
 
