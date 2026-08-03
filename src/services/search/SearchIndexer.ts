@@ -31,11 +31,17 @@ function emptyIndex(): WorkspaceIndex {
  * Builds are generation-stamped. `invalidate()` bumps the generation, so a
  * build racing against a rescan discards its own results instead of
  * publishing a stale snapshot over a fresh one.
+ *
+ * The generation stamp only suppresses publishing; the reads it started
+ * keep going. Each build therefore also owns an AbortController that
+ * `abort()` trips, so abandoning a build really does stop its IO instead
+ * of stacking full workspace scans behind a few quick refreshes.
  */
 class SearchIndexerImpl {
   private index: WorkspaceIndex = emptyIndex();
   private listeners = new Set<Listener>();
   private building: { generation: number; promise: Promise<void> } | null = null;
+  private controller: AbortController | null = null;
   private generation = 0;
 
   snapshot(): WorkspaceIndex {
@@ -60,22 +66,44 @@ class SearchIndexerImpl {
   warm(projects?: Project[]): Promise<void> {
     if (this.building) return this.building.promise;
     const generation = ++this.generation;
-    const promise = this.build(generation, projects).finally(() => {
+    // A fresh controller per build, so an earlier abort never carries over
+    // and leaves the new build finishing zero batches.
+    const controller = new AbortController();
+    this.controller = controller;
+    const promise = this.build(generation, controller.signal, projects).finally(() => {
       if (this.building?.generation === generation) this.building = null;
+      if (this.controller === controller) this.controller = null;
     });
     this.building = { generation, promise };
     return promise;
   }
 
+  /**
+   * Abandon the build in flight and stop its reads.
+   *
+   * The TUI calls this on teardown: nothing calls `process.exit()`, so a
+   * metadata pass still walking the workspace keeps Node alive and delays
+   * the shell prompt by seconds.
+   */
+  abort(): void {
+    this.generation += 1;
+    this.controller?.abort();
+    this.controller = null;
+    this.building = null;
+  }
+
   /** Drop the snapshot and abandon any build in flight. */
   invalidate(): void {
-    this.generation += 1;
-    this.building = null;
+    this.abort();
     this.index = emptyIndex();
     this.publish();
   }
 
-  private async build(generation: number, seed?: Project[]): Promise<void> {
+  private async build(
+    generation: number,
+    signal: AbortSignal,
+    seed?: Project[],
+  ): Promise<void> {
     const home = os.homedir();
     const projects = seed ?? (await DiscoveryService.discoverProjects());
     if (generation !== this.generation) return;
@@ -106,16 +134,20 @@ class SearchIndexerImpl {
     this.index = { ...this.index, sessions, total: sessions.length };
     this.publish();
 
-    const metadata = await SessionMetadataService.getMany(sessions, (progress) => {
-      if (generation !== this.generation) return;
-      this.index = {
-        ...this.index,
-        metadata: progress.metadata,
-        done: progress.done,
-        total: progress.total,
-      };
-      this.publish();
-    });
+    const metadata = await SessionMetadataService.getMany(
+      sessions,
+      (progress) => {
+        if (generation !== this.generation) return;
+        this.index = {
+          ...this.index,
+          metadata: progress.metadata,
+          done: progress.done,
+          total: progress.total,
+        };
+        this.publish();
+      },
+      signal,
+    );
     if (generation !== this.generation) return;
 
     this.index = {

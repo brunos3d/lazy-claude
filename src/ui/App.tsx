@@ -181,13 +181,22 @@ function AppShell({ initialProject }: AppProps) {
         // Reuse the discovery that just ran instead of scanning twice, and
         // build in the background so opening the palette never waits.
         SearchIndexer.invalidate();
-        void SearchIndexer.warm(list);
+        // The index is an optimisation, never a dependency of the screen,
+        // and `publish()` runs React setters inside the build. A listener
+        // that throws must not become an unhandled rejection and take the
+        // whole TUI down with it.
+        SearchIndexer.warm(list).catch(() => {});
       })
       .catch((error: Error) => {
         if (!cancelled) setLoadError(error.message);
       });
     return () => {
       cancelled = true;
+      // Nothing calls process.exit(), so a metadata pass still reading the
+      // workspace would hold the event loop open after Ink unmounts and
+      // stall the shell. This also fires on refresh, which is what stops
+      // repeated refreshes stacking whole-workspace scans.
+      SearchIndexer.abort();
     };
   }, [refreshTick]);
 
@@ -226,6 +235,13 @@ function AppShell({ initialProject }: AppProps) {
 
   const selectedItem = projectItems[Math.min(projectIndex, projectItems.length - 1)] ?? null;
   const selectedProject = selectedItem?.kind === 'project' ? selectedItem.project : null;
+
+  /**
+   * The session list the current selection asks for. `loadedKey` is the one
+   * that has actually arrived, so this leads it by one async hop; a pending
+   * jump compares against this to tell "still loading" from "user moved on".
+   */
+  const currentKey = selectedProject ? pendingKey(selectedProject.encoded, showArchived) : null;
 
   /** Encoded folder to current project path, for the all-sessions view. */
   const projectByEncoded = useMemo(() => {
@@ -869,6 +885,7 @@ function AppShell({ initialProject }: AppProps) {
     sessions: visibleSessions,
     sessionsLoading,
     loadedKey,
+    currentKey,
     actions: jumpActions,
   });
 

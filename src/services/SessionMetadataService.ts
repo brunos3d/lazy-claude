@@ -60,6 +60,13 @@ class SessionMetadataServiceImpl {
    * `onProgress` receives the live result map, not a copy, so a caller
    * showing progress can render partial titles without paying an O(n) copy
    * per batch. The map is complete once the returned promise resolves.
+   *
+   * `signal` stops the pass between batches. A whole-workspace pass keeps
+   * the Node event loop alive for seconds, which delays quitting the TUI
+   * long after the interface is gone; abandoning the caller is not enough,
+   * the cancellation has to reach this loop. An aborted pass still returns
+   * whatever it managed to read and still saves the cache, so the work
+   * done so far is not thrown away.
    */
   async getMany(
     sessions: SessionEntry[],
@@ -68,6 +75,7 @@ class SessionMetadataServiceImpl {
       total: number;
       metadata: Map<string, SessionMetadata>;
     }) => void,
+    signal?: AbortSignal,
   ): Promise<Map<string, SessionMetadata>> {
     await this.cache.load();
     const result = new Map<string, SessionMetadata>();
@@ -83,6 +91,7 @@ class SessionMetadataServiceImpl {
 
     const CONCURRENCY = 12;
     for (let i = 0; i < pending.length; i += CONCURRENCY) {
+      if (signal?.aborted) break;
       const batch = pending.slice(i, i + CONCURRENCY);
       const parsed = await Promise.all(
         batch.map(async (session) => [session, await this.parse(session)] as const),

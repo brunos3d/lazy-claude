@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { encodeProjectPath } from '../../core/paths.js';
 import type { Project } from '../DiscoveryService.js';
+import { SessionMetadataService } from '../SessionMetadataService.js';
+import { listAllSessions } from '../SessionService.js';
 import { SearchIndexer } from './SearchIndexer.js';
 
 /** A throwaway ~/.claude with one project holding two sessions. */
@@ -82,6 +84,29 @@ test('subscribers see progress and are released on unsubscribe', async () => {
     const before = seen.length;
     SearchIndexer.invalidate();
     assert.equal(seen.length, before, 'unsubscribed listener still fired');
+  } finally {
+    delete process.env.LAZY_CLAUDE_CLAUDE_DIR;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The generation stamp alone only hides a build's results; the reads keep
+ * running and hold the event loop open after the TUI unmounts. The signal
+ * has to reach the batch loop, which is what this pins down.
+ */
+test('an aborted signal stops the metadata pass before it parses anything', async () => {
+  const { root } = await fixture();
+  process.env.LAZY_CLAUDE_CLAUDE_DIR = root;
+  try {
+    const sessions = await listAllSessions();
+    assert.equal(sessions.length, 2, 'fixture should expose two uncached sessions');
+
+    const metadata = await SessionMetadataService.getMany(sessions, undefined, AbortSignal.abort());
+
+    for (const session of sessions) {
+      assert.equal(metadata.has(session.file), false, `parsed ${session.id} despite the abort`);
+    }
   } finally {
     delete process.env.LAZY_CLAUDE_CLAUDE_DIR;
     await fs.rm(root, { recursive: true, force: true });

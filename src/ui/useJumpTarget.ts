@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JumpTarget } from '../services/search/types.js';
 import type { SessionEntry } from '../services/SessionService.js';
 import type { DetailTab } from './SessionDetail.js';
@@ -85,14 +85,24 @@ export function useJumpTarget(options: {
   sessionsLoading: boolean;
   /** pendingKey of the session list currently loaded, or null. */
   loadedKey: string | null;
+  /** pendingKey the current selection asks for, ahead of the load. */
+  currentKey: string | null;
   actions: JumpActions;
 }): (target: JumpTarget) => void {
-  const { items, sessions, sessionsLoading, loadedKey, actions } = options;
+  const { items, sessions, sessionsLoading, loadedKey, currentKey, actions } = options;
   const [pending, setPending] = useState<{ key: string; file: string } | null>(null);
+
+  // The overlay stack snapshots a dialog's spec when it opens, so the
+  // palette keeps whichever `jumpTo` existed at that moment. Reading the
+  // rows through a ref keeps this callback identity-stable, or a palette
+  // opened before discovery finished would forever plan against the empty
+  // project list it captured.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   const jumpTo = useCallback(
     (target: JumpTarget) => {
-      const plan = planJump(target, items);
+      const plan = planJump(target, itemsRef.current);
       if (!plan) {
         actions.setStatus('That result is no longer available.');
         return;
@@ -113,11 +123,19 @@ export function useJumpTarget(options: {
       setPending(plan.pending);
       if (!plan.pending) actions.setSessionIndex(0);
     },
-    [items, actions],
+    [actions],
   );
 
   useEffect(() => {
-    if (!pending || sessionsLoading) return;
+    if (!pending) return;
+    // The selection moved off the target before its list arrived, so no
+    // load will ever produce that key. Dropping the jump here stops it
+    // firing minutes later if the user navigates back to the project.
+    if (currentKey !== pending.key) {
+      setPending(null);
+      return;
+    }
+    if (sessionsLoading) return;
     // Wait for the list that actually belongs to the target, otherwise the
     // previous project's sessions would resolve the jump against the wrong
     // set and land on an arbitrary row.
@@ -127,7 +145,7 @@ export function useJumpTarget(options: {
     if (index >= 0) actions.setSessionIndex(index);
     else actions.setStatus('That session is no longer available.');
     setPending(null);
-  }, [pending, sessions, sessionsLoading, loadedKey, actions]);
+  }, [pending, sessions, sessionsLoading, loadedKey, currentKey, actions]);
 
   return jumpTo;
 }
