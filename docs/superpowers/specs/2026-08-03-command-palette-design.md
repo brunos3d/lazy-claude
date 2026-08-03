@@ -1,6 +1,6 @@
 # Command Palette
 
-Status: approved, not yet implemented
+Status: implemented
 Date: 2026-08-03
 
 A global search and navigation overlay for the Lazy Claude TUI, opened with

@@ -1,48 +1,72 @@
-
 # Lazy Claude
 
-Find and resume Claude Code sessions from the terminal, and keep the project data behind them healthy. A keyboard-driven TUI in the spirit of LazyGit, plus a CLI that exposes the same operations for scripts.
+A terminal UI for finding, resuming and maintaining Claude Code sessions.
 
-Sessions pile up quickly. After a few weeks there are hundreds of them across dozens of projects, stored as UUID-named files, and Claude Code's own picker only lists the directory you are standing in. Lazy Claude reads the same metadata Claude Code writes, so every session shows its real title next to its branch, size, and age. Fuzzy search cuts hundreds down to a handful in three keystrokes, the inspector shows what a session actually did (messages, tool calls, files touched, a conversation preview, a timeline), and one key hands the terminal over to `claude --resume` in that project's directory.
+[![npm](https://img.shields.io/npm/v/lazy-claude-tui)](https://www.npmjs.com/package/lazy-claude-tui)
+[![node](https://img.shields.io/node/v/lazy-claude-tui)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/lazy-claude-tui)](LICENSE)
 
-Moving a project breaks all of this, because Claude Code derives each storage path from the project's absolute path: a plain `mv` orphans every session that belonged to it. Lazy Claude owns that problem too. It moves projects with their history intact, including nested sub-projects and worktrees, repairs references after a move that already happened, archives and prunes what you no longer need, packs a project and its sessions into a portable archive, and backs up the history index before every change. It is native TypeScript throughout, with no shell-outs and no dependency on other tools.
+Claude Code stores every conversation as a UUID-named file, and its own picker only lists the directory you happen to be standing in. After a few weeks that is hundreds of sessions spread across dozens of projects, with no way to search them and no way to move a project without orphaning its history.
 
-https://github.com/user-attachments/assets/1a9a7ca4-f129-4eeb-96b2-6297c67345ed
+Lazy Claude reads the same files Claude Code writes. Every session shows its real title, `ctrl+k` searches all of them at once, and one key hands the terminal over to `claude --resume` in the right directory. It also fixes the things Claude Code has no answer for: moving a project without losing its sessions, repairing references after a manual `mv`, archiving what you no longer need, and backing up the history index before every change.
+
+![Lazy Claude command palette](docs/screenshot-fuzzy-finder.png)
+
+## Contents
+
+- [Why it exists](#why-it-exists)
+- [Features](#features)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Interface overview](#interface-overview)
+- [Command palette](#command-palette)
+- [Session inspector](#session-inspector)
+- [Actions](#actions)
+- [Managing projects and sessions](#managing-projects-and-sessions)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [CLI](#cli)
+- [Configuration](#configuration)
+- [Demo](#demo)
+- [Supported platforms](#supported-platforms)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+
+## Why it exists
+
+Two problems, both caused by how Claude Code stores sessions on disk.
+
+Finding an old conversation is hard. Sessions are named by UUID, the resume picker is scoped to the current directory, and there is no search across projects. If you remember the work but not where you did it, you are out of luck.
+
+Moving a project breaks its history. Claude Code derives each storage path from the project's absolute path, so a plain `mv` orphans every session that belonged to it. Renaming a repository does the same thing.
+
+Lazy Claude solves both without touching Claude Code itself. It reads the same metadata, understands the same encoding, and hands control back to `claude` when you want to continue a conversation.
 
 ## Features
 
-Finding and resuming
-
-- Sessions listed by their real title, the same one Claude Code's resume picker shows, with branch, age, and size beside them
-- Fuzzy search (`/`) in both panels, fzf-style: `lz` finds `lazy-claude`, `vrt` finds `vortex-platform`, with matched characters highlighted and results ranked by match quality
-- Resume in Claude Code (`e`), or resume with permission prompts skipped (`E`), handing the terminal over from the project's own directory
-- Open straight into a workspace with `lazyclaude .` or `lazyclaude <path>`
-
-Understanding a session
-
-- Message and tool-call counts, files touched and created, token usage, duration, model, and Claude Code version
-- Conversation preview, activity timeline, and file list, across four inspector tabs
+- Sessions listed by their real title, with branch, size and age beside them
+- Global command palette (`ctrl+k`) that searches every project and session at once
+- Fuzzy search (`/`) inside each panel, fzf-style, with matched characters highlighted
+- Session inspector with four tabs: overview statistics, conversation preview, activity timeline and file list
+- Resume in Claude Code from anywhere, with or without permission prompts
+- Move a project and migrate every session reference, including nested sub-projects and worktrees
+- Repair references after a manual `mv` or rename
+- Archive, restore and delete individual sessions
+- Pack a project and its sessions into a portable `.claudepack` archive
+- Timestamped `history.jsonl` backups before every mutation, with a manager to restore them
+- Health check, diagnostics and pruning for orphaned session folders
 - Integrity check that validates every record in a session file
-
-Managing the data
-
-- Move a project: relocates the directory and migrates every reference, including nested sub-project and worktree session folders, archived sessions, and history entries, with automatic rollback on failure
-- Repair references after a manual `mv`: auto-detects broken entries, searches likely new locations, and relinks explicitly or interactively
-- Archive, restore, and delete individual sessions
-- Pack a project with its sessions into a portable `.claudepack` archive; unpack rewrites paths for the new machine or location
-- Timestamped `history.jsonl` backups before every mutation, with a manager to create, restore, and delete them
-- Health check and prune for orphaned session folders
 - Dry-run mode on every destructive operation
-
-Interface
-
-- Hierarchical navigation in the style of LazyGit: the project list and the selected project's sessions stay visible together, while the wide panel follows focus
-- One action palette (`x`) holding every operation, grouped into Session, Project, Maintenance, and Dangerous, adapting to the focused panel and listing unavailable actions with the reason
-- Dialogs render as overlays over the interface rather than replacing it, and stack
+- Overlay dialogs that stack on top of the interface instead of replacing it
+- A CLI that exposes every operation for scripts
+- Native TypeScript, no shell-outs, three runtime dependencies
 
 ## Installation
 
-The package is published as `lazy-claude-tui`. The main command is `lazyclaude`, with `lazy-claude`, `lazy-claude-tui` and `lzc` installed as aliases for it. All four run the same binary, so pick whichever you prefer to type.
+The package is published as `lazy-claude-tui`. It installs four commands, all running the same binary: `lazyclaude` (the main one), plus `lazy-claude`, `lazy-claude-tui` and `lzc`.
+
+Requires Node.js 18 or newer.
+
+Global install:
 
 ```bash
 npm install -g lazy-claude-tui
@@ -60,15 +84,14 @@ yarn global add lazy-claude-tui
 bun add -g lazy-claude-tui
 ```
 
-Run it without installing:
+Run it once without installing:
 
 ```bash
 npx lazy-claude-tui
 pnpm dlx lazy-claude-tui
+yarn dlx lazy-claude-tui
 bunx lazy-claude-tui
 ```
-
-Requires Node.js 18 or newer.
 
 From source:
 
@@ -79,60 +102,253 @@ npm install       # builds via the prepare script
 npm link          # exposes lazyclaude and its aliases globally
 ```
 
-## TUI
+## Quick start
 
 ```bash
-lazyclaude          # browse every project
-lazyclaude .        # open the current workspace directly
-lazyclaude ~/code/app
+npm install -g lazy-claude-tui
+lazyclaude
 ```
 
-The left column is a hierarchy: projects on top, the selected project's sessions below. Both stay on screen, so the workspace you are in never disappears while you browse its sessions. The wide panel on the right follows focus, showing the project summary while Projects has focus and the session details once Sessions or Details does, with tabs for overview, conversation preview, timeline, and file activity.
+That is it. The TUI opens on every project it finds.
 
-```
-┌──────────────────────────────┐┌────────────────────────┐
-│ Projects                     ││ Project summary,       │
-│   ~/github/project-a         ││ or session details     │
-│ ▶ ~/github/lazy-claude       ││ once a session has     │
-│   ~/github/project-c         ││ focus                  │
-├──────────────────────────────┤│                        │
-│ Sessions: ~/github/lazy-claude││                       │
-│ ▶ Build Lazy Claude UI       ││                        │
-│   Fix Windows support        ││                        │
-└──────────────────────────────┘└────────────────────────┘
+```bash
+lazyclaude .              # open on the current workspace
+lazyclaude ~/code/app     # open on a specific project
 ```
 
-Focus moves with `tab` (Projects, Sessions, Details), `enter` to step down, and `esc` to step back up. The focused panel has a green border and paints its selection as a solid bar; the other panels keep a `▶` marker so the current project and session stay identifiable. Destructive actions confirm with the exact planned steps.
+Inside the TUI:
 
-The inspector has its own tab bar under the panel title, separated from the content by a rule. The active tab is a filled blue button, inactive tabs sit at low contrast, and each carries the number that selects it, so `1`..`4` are discoverable without opening the help. Green stays reserved for titles and status, so navigation never reads as body text.
+1. Press `ctrl+k` and type a few characters to find any session.
+2. Press `enter` to jump to it.
+3. Press `e` to resume it in Claude Code.
 
-Press `x` anywhere for the action palette. It is the single place every operation lives, grouped into Session, Project, Maintenance and Dangerous, with the destructive group last and marked in red. The palette adapts to whichever panel has focus, so there is no separate shortcut set for projects and sessions. Inside it, `enter` runs the selection and a shortcut key runs immediately.
+Press `?` for help and `q` to quit.
 
-Dialogs are overlays, not screens. The palette, confirmations, pickers, and reports draw on top of the interface while the panels stay visible and keep their selection, so closing a dialog returns you exactly where you were. Only the top dialog receives keys; the panels underneath are inert until it closes. Dialogs stack, so a confirmation raised from a picker layers over it.
+## Interface overview
 
-The footer stays about navigation. Only the frequent per-item actions keep a global shortcut; everything else is discovered in the palette.
+The screen is three panels and a footer.
 
-| Key              | Action                                        |
-| ---------------- | --------------------------------------------- |
-| `↑`/`k`, `↓`/`j` | move within the focused panel                 |
-| `tab`            | cycle Projects, Sessions, Details             |
-| `enter`          | step down the hierarchy                       |
-| `esc`            | step back up                                  |
-| `1`..`4`         | switch inspector tab (numbers shown in the bar) |
-| `J` / `K`        | scroll the detail panel from anywhere         |
-| `/`              | fuzzy-search the focused list                 |
-| `e`               | resume the session in Claude Code      |
-| `E`               | resume, skipping permission prompts    |
-| `a` / `r`         | archive / restore session              |
-| `d`               | delete session                         |
-| `c`               | check session integrity                |
-| `t`               | toggle live / archived sessions        |
-| `x`               | action palette (every operation)       |
-| `?` / `q`         | help / quit                            |
+| Panel        | Contents                                                                              |
+| ------------ | ------------------------------------------------------------------------------------- |
+| Projects     | Every project, plus an "All sessions" row that widens the session list to the machine  |
+| Sessions     | Sessions belonging to the highlighted project, live or archived                        |
+| Inspector    | The project summary, or the session details once Sessions or Details has focus         |
+
+![Projects panel with a missing project selected](docs/screenshot-orphan-sessions-workspace.png)
+
+The left column is a hierarchy. Projects sit on top and their sessions below, and both stay on screen, so the workspace you are in never disappears while you browse its sessions. Sessions always belong to the highlighted project, whichever panel has focus.
+
+Focus moves with `tab` through Projects, Sessions and Details. `enter` steps down the hierarchy, `esc` steps back up. The focused panel has a green border and paints its selection as a solid bar; the others keep a `▶` marker so the current project and session stay identifiable.
+
+Project rows carry their status. A green dot means the directory exists, red means it is missing, and a folder with no resolvable path is listed as an orphan. Selecting one shows what is wrong in the inspector, which is where a repair usually starts.
+
+Dialogs are overlays, not screens. Confirmations, pickers, reports and the action menu draw on top of the interface while the panels stay visible and keep their selection, so closing a dialog returns you exactly where you were. Only the top dialog receives keys. Dialogs stack, so a confirmation raised from a picker layers over it.
+
+## Command palette
+
+`ctrl+k` opens a global search over every project and session on the machine, live and archived. It exists because the per-panel `/` search only filters the list in front of you, which is no help when you cannot remember which project the work was in.
+
+![Command palette searching projects and sessions](docs/screenshot-fuzzy-finder.png)
+
+Type to search. Results are grouped into categories with a tab bar under the input, and each tab owns the whole result area, so nothing is truncated and long result sets stay reachable. A category with no hits has no tab, so you can never land on an empty one. Each tab keeps its own cursor and scroll position.
+
+| Key             | Action                          |
+| --------------- | ------------------------------- |
+| `ctrl+k`        | open the palette                |
+| `tab` / `shift+tab` | switch category             |
+| `↑` / `↓`       | move through results            |
+| `pgup` / `pgdn` | page through results            |
+| `enter`         | jump to the selected result     |
+| `ctrl+u`        | clear the query                 |
+| `esc`           | close                           |
+
+Jumping selects the result's project, loads its sessions, highlights the session and focuses the right panel. Jumping to an archived session flips the list to the archived view first. Recent searches appear when the input is empty.
+
+The palette navigates and nothing else. Operations stay in the action menu, which keeps both predictable.
+
+## Session inspector
+
+Step into the Sessions panel and the inspector reads the highlighted session in a single pass, filling four tabs. Press `1` to `4` to switch between them, or `tab` while the Details panel has focus.
+
+| Tab              | Contents                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `1` Overview     | Id, project, branch, size, timestamps, message and tool-call counts, tokens, duration, model, top tools |
+| `2` Conversation | A readable preview of the exchange                                                   |
+| `3` Timeline     | Activity over the life of the session                                                |
+| `4` Files        | Files the session touched and created                                                |
+
+`J` and `K` scroll the inspector from any panel, so you can read a preview without leaving the session list.
+
+Titles come from the `ai-title` record Claude Code writes, the same one its resume picker shows. When a session has no AI title, the label falls back in order to the opening prompt, the first user message, the slash command that started it, and finally `(empty session)`. Inferred titles are dimmed so a guess never looks like a real title.
+
+## Actions
+
+Press `x` for the action menu. It is the single place every operation lives, grouped into Session, Project, Maintenance and Dangerous, with the destructive group last and marked in red. Unavailable actions stay listed with the reason, so the menu doubles as documentation.
+
+![Project actions menu](docs/screenshot-project-actions-menu.png)
+
+The menu adapts to the focused panel. From Projects it offers the project operations; from Sessions it drops them and leads with the session ones.
+
+![Session actions menu](docs/screenshot-session-actions-menu.png)
+
+Inside the menu, `enter` runs the selection and typing a shortcut key runs it directly.
+
+| Key | Action              | Group       |
+| --- | ------------------- | ----------- |
+| `e` | Resume session      | Session     |
+| `E` | Resume session (yolo) | Session   |
+| `a` | Archive session     | Session     |
+| `r` | Restore session     | Session     |
+| `m` | Move project        | Project     |
+| `F` | Repair references   | Project     |
+| `p` | Pack project        | Project     |
+| `i` | Project information | Project     |
+| `c` | Check integrity     | Maintenance |
+| `B` | Backup manager      | Maintenance |
+| `U` | Unpack archive      | Maintenance |
+| `V` | Health check        | Maintenance |
+| `g` | Run diagnostics     | Maintenance |
+| `R` | Rescan              | Maintenance |
+| `M` | Refresh metadata    | Maintenance |
+| `d` | Delete session      | Dangerous   |
+| `D` | Delete project      | Dangerous   |
+| `P` | Prune orphans       | Dangerous   |
+
+Destructive actions confirm first and show the exact planned steps.
+
+## Managing projects and sessions
+
+### Resuming
+
+`e` resumes the highlighted session, `E` resumes it with `--dangerously-skip-permissions` after a confirmation that shows the exact command.
+
+Neither wraps Claude Code. Lazy Claude unmounts, leaves the alternate screen, prints the shell equivalent, then executes Claude Code in the project's own directory with stdio inherited. What you get is the same as typing:
+
+```bash
+cd <project-directory>
+claude --resume <session-id>
+```
+
+Everything is validated before the interface exits, so a missing `claude` binary, a project directory that has moved, a deleted session file, or an archived session (invisible to Claude Code until restored) each produce a dialog you can act on instead of a broken terminal.
+
+### Moving a project
+
+`lazyclaude move` operates on a project rather than a session. It moves the directory, renames the session folder for every session bound to it, migrates the folders of nested sub-projects and worktrees, updates `history.jsonl`, and keeps archived sessions in sync. Nothing has to be resumed.
+
+```bash
+lazyclaude move ~/code/old-name ~/code/new-name
+lazyclaude move --here ~/code/some-project     # move it into the current directory
+lazyclaude move ~/a ~/b -n                     # print the plan, change nothing
+```
+
+If the directory already moved, `lazyclaude repair` performs the same relocation after the fact. It auto-detects broken entries, searches likely new locations, and relinks explicitly or interactively.
+
+```bash
+lazyclaude repair                          # scan and relink what it can find
+lazyclaude repair ~/code/new-location      # relink a known project by its new path
+lazyclaude repair --from ~/old --to ~/new  # relink explicitly
+```
+
+Both run as journaled operations: every step records its inverse, and a failure undoes the completed steps in reverse order.
+
+### How this differs from `/cd` and `/add-dir`
+
+Claude Code has two built-ins that touch this area, and they solve a different problem.
+
+`/cd` changes the working directory of the session you have open and, since v2.1.169, relocates that session's storage too. Its scope is exactly one session: moving N sessions means resuming each and running `/cd` N times. `/add-dir` grants the open session access to an extra directory and relocates nothing.
+
+|                        | Scope                                   | Session must be open | Moves storage             | N sessions at once |
+| ---------------------- | --------------------------------------- | -------------------- | ------------------------- | ------------------ |
+| `/cd`                  | the one open session                    | Yes                  | Yes, from v2.1.169        | No                 |
+| `/add-dir`             | the one open session                    | Yes                  | No                        | No                 |
+| `lazyclaude move`      | a project and every session bound to it | No                   | Yes, project and folders  | Yes                |
+| `lazyclaude repair`    | same, when the directory already moved  | No                   | Yes, session folders      | Yes                |
+| `lazyclaude pack`      | one project, archived and restored      | No                   | Yes                       | Yes                |
+
+Use `/cd` for a single live session you are working in right now. Use Lazy Claude when relocating a repository together with its full history, or repairing one that already moved.
+
+### Archiving
+
+Archiving moves a session file to `~/.claude/lazy-claude/archive/`, outside the projects directory, so Claude Code stops listing it until you restore it. Nothing is deleted. Press `t` to toggle between live and archived sessions, `a` to archive, `r` to restore.
+
+### Packing
+
+`lazyclaude pack` writes a project and all its sessions into a portable `.claudepack` archive. `unpack` restores it to a new location and rewrites the paths for the new machine, which makes it the closest thing to a full snapshot before a large change.
+
+```bash
+lazyclaude pack ~/code/app                 # writes ./app.claudepack
+lazyclaude pack ~/code/app ~/backups/app   # or name the archive yourself
+lazyclaude unpack ./app.claudepack ~/code/app-restored
+```
+
+The destination must not already exist, so an unpack never merges into a live project by accident. Pass `-f` if you mean to overwrite.
+
+### Backups and health
+
+`move`, `repair`, `remove` and `unpack` back up `history.jsonl` before touching anything, unless you pass `--no-backup`. The backup manager (`B`) creates, restores and deletes those snapshots.
+
+> [!NOTE]
+> The automatic backup covers `history.jsonl`, not the transcripts themselves. For a full snapshot before a large change, run `lazyclaude pack`.
+
+`lazyclaude verify` reports missing project directories and orphaned session folders and exits non-zero when it finds either. `lazyclaude doctor` prints where everything lives and how much of it there is. `lazyclaude prune` deletes session folders whose project no longer exists.
+
+## Keyboard shortcuts
+
+Navigation
+
+| Key                | Action                                        |
+| ------------------ | --------------------------------------------- |
+| `↑` / `k`, `↓` / `j` | move within the focused panel               |
+| `tab`              | cycle Projects, Sessions, Details             |
+| `shift+tab`        | cycle backwards                               |
+| `enter`, `→` / `l` | step down the hierarchy                       |
+| `esc`, `←` / `h`   | step back up                                  |
+
+Search
+
+| Key                | Action                                        |
+| ------------------ | --------------------------------------------- |
+| `/`                | search the focused list                       |
+| `↑` / `↓`          | move through matches while typing             |
+| `enter`            | keep the filter, hand the keyboard back       |
+| `ctrl+u`           | clear the query without leaving search        |
+| `esc`              | clear the query and leave search              |
+| `ctrl+k`           | command palette, searches everything          |
+
+Inspector
+
+| Key         | Action                                               |
+| ----------- | ---------------------------------------------------- |
+| `1` .. `4`  | overview, conversation, timeline, files              |
+| `tab`       | next tab, while the Details panel has focus          |
+| `J` / `K`   | scroll the inspector from any panel                  |
+
+Actions
+
+| Key | Action                                              |
+| --- | --------------------------------------------------- |
+| `x` | open the action menu                                |
+| `e` | resume the session in Claude Code                   |
+| `E` | resume with `--dangerously-skip-permissions`        |
+| `a` | archive the session                                 |
+| `r` | restore an archived session                         |
+| `d` | delete the session permanently                      |
+| `c` | check session file integrity                        |
+
+Every other operation is reached through the action menu. Its shortcut keys are listed in [Actions](#actions) and work while the menu is open.
+
+General
+
+| Key | Action                                |
+| --- | ------------------------------------- |
+| `t` | toggle live and archived sessions     |
+| `R` | rescan projects and sessions          |
+| `?` | help                                  |
+| `q` | quit                                  |
 
 ## CLI
 
-Everything in the TUI is also a command. The CLI and TUI share the same service layer, so behavior is identical.
+Every TUI operation is also a command. Both front ends call the same services, so behavior is identical.
 
 ```bash
 lazyclaude list [--json]            # all projects with status
@@ -165,72 +381,36 @@ lazyclaude session delete <id>
 lazyclaude session check <id>       # integrity scan
 ```
 
-Common flags: `-n/--dry-run`, `-f/--force`, `-p/--parents`, `--no-backup`, `--json`.
+| Flag              | Meaning                                      |
+| ----------------- | -------------------------------------------- |
+| `-n`, `--dry-run` | print the plan, change nothing               |
+| `-f`, `--force`   | skip confirmation prompts                    |
+| `-p`, `--parents` | create missing parent directories            |
+| `--no-backup`     | skip the automatic `history.jsonl` backup    |
+| `--json`          | JSON output for `list`, `sessions` and `info` |
 
-## How this differs from `/cd` and `/add-dir`
+Session ids accept unique prefixes, so `lazyclaude show 155552ca` is enough.
 
-Claude Code binds a session to the absolute path it was started from. Transcripts live at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`, and that path is encoded both in the folder name and inside the file contents. Move or rename a repository and every prior session stops showing up from the new location.
+The TUI needs a TTY and exits with an error otherwise. Use the CLI to inspect things from a script or a pipe.
 
-Two built-ins touch this area, and they solve different problems. `/cd` changes the working directory of the session you have open, keeping conversation history, model selection, and prompt cache, and reloading the new directory's `CLAUDE.md`. Since v2.1.169 it also relocates that session's storage, so the session appears in the new directory's picker; since v2.1.196 it stays out of the old directory's picker after a crash or forced exit. It is the right tool when you are mid-work and want to continue elsewhere, but its scope is exactly one session: moving N sessions means resuming each and running `/cd` N times. `/add-dir` grants the open session access to an additional directory and relocates nothing. Sessions that added the current directory this way do appear in its picker, which can resemble migration without being it.
+## Configuration
 
-|                                | Scope                                     | Session must be open | Moves storage on disk    | N sessions per invocation | Rewrites paths inside transcripts |
-| ------------------------------ | ----------------------------------------- | -------------------- | ------------------------ | ------------------------- | --------------------------------- |
-| `/cd`                          | the one open session                      | Yes                  | Yes, from v2.1.169       | No, one at a time         | Internal to Claude Code           |
-| `/add-dir`                     | the one open session                      | Yes                  | No                       | No                        | No                                |
-| `lazyclaude move`              | a project and every session bound to it   | No                   | Yes, project and folders | Yes                       | No                                |
-| `lazyclaude repair`            | same, when the directory already moved    | No                   | Yes, session folders     | Yes                       | No                                |
-| `lazyclaude pack` / `unpack`   | one project, archived and restored        | No                   | Yes                      | Yes                       | Yes, on unpack                    |
+| Variable                  | Purpose                                                              |
+| ------------------------- | -------------------------------------------------------------------- |
+| `LAZY_CLAUDE_CLAUDE_DIR`  | Override the Claude data directory. Useful for testing against a copy |
+| `CLAUDE_CONFIG_DIR`       | Respected when set, the same variable Claude Code uses                |
+| `LAZY_CLAUDE_CLAUDE_BIN`  | Path to the `claude` executable, when it is not on `PATH`             |
 
-`lazyclaude move` operates on a project rather than a session. It moves the directory, renames the session folder for every session bound to it, migrates the folders of nested sub-projects and worktrees, updates `history.jsonl`, and keeps archived sessions in sync. Nothing has to be resumed. `lazyclaude repair` performs the same relocation when the directory was already moved with `mv`. Both accept `-n/--dry-run` to print the plan first, and both run as journaled operations that undo completed steps if a later one fails.
+The data directory resolves in that order and falls back to `~/.claude`.
 
-Use `/cd` for a single live session you are working in right now. Use Lazy Claude when relocating a repository together with its full history, or repairing one that already moved. There is no built-in bulk equivalent; the open request is [anthropics/claude-code#27473](https://github.com/anthropics/claude-code/issues/27473).
+> [!WARNING]
+> Lazy Claude reads and mutates real Claude Code data. Point `LAZY_CLAUDE_CLAUDE_DIR` at a throwaway directory before trying anything destructive.
 
-One caveat worth stating plainly: this depends on an on-disk layout that is internal to Claude Code and changes between versions. `move`, `repair`, `remove`, and `unpack` back up `history.jsonl` first (unless `--no-backup`), but that backup does not include transcripts. For a full snapshot before a large change, run `lazyclaude pack`. See the [sessions documentation](https://code.claude.com/docs/en/sessions).
+## Demo
 
-## Resuming a session
+A walkthrough of finding a session, inspecting it, and resuming it:
 
-Finding a session is usually a prelude to continuing it, so the two resume actions lead the action menu ahead of every management operation. `e` resumes the highlighted session and `E` resumes it with `--dangerously-skip-permissions`, which asks for confirmation first and shows the exact command it will run.
-
-Both hand the terminal over rather than wrapping it: Lazy Claude unmounts, leaves the alternate screen, prints the shell equivalent, then executes Claude Code in the project's own directory with stdio inherited. What you get is the same as typing:
-
-```bash
-cd <project-directory>
-claude --resume <session-id>
-```
-
-Everything is validated before the interface exits, so a missing Claude Code executable, a project directory that has moved, a deleted session file, or an archived session (invisible to Claude Code until restored) each produce a dialog you can act on instead of a broken handoff. Set `LAZY_CLAUDE_CLAUDE_BIN` if `claude` is not on your `PATH`.
-
-Launch modes are data in `LauncherService`, contributing arguments, environment, and an optional command wrapper. Adding a read-only mode, a different model, or launching inside tmux means adding an entry there; the menu picks it up without UI changes.
-
-## Fuzzy search
-
-Press `/` to search the focused panel. Matching is fuzzy in the fzf sense: the characters you type must appear in order but not adjacently, so `lz` finds `lazy-claude` and `agn` finds `agenda-zap`. Results are ranked, rewarding consecutive runs, characters at the start of a path or word segment, and matches near the beginning of the text. Matched characters are highlighted in the list.
-
-Filtering is incremental. `esc` clears the query, a second `esc` steps back up the hierarchy, `enter` keeps the filter and hands the keyboard back to the list, and `ctrl+u` clears the query without leaving search. Each panel keeps its own query, so filtering projects does not disturb a session filter.
-
-Projects match on their path. Sessions match on title, git branch, and session id. Session matching deliberately excludes the project path: fuzzy matching against long absolute paths matches almost everything (`clm` matches `/home/user/.claude-mem/...`, which alone can own hundreds of sessions), which buries real title hits. Narrowing by project is what the Projects panel is for.
-
-Adding a new searchable attribute means appending a field in `SearchService`, which is also where an on-disk content index over prompts, summaries, and modified files would plug in.
-
-## Session titles and metadata
-
-Claude Code writes an `ai-title` record into each session file, which is what the resume picker displays. It sits near the end of a multi-megabyte file, so Lazy Claude reads a chunk from each end of the file rather than parsing all of it, and caches the result keyed by file size and mtime. A first scan of ~800 sessions takes about a quarter of a second; later launches are instant.
-
-When a session has no AI title, the label falls back in order to the opening prompt, the first user message, the slash command that started it, and finally `(empty session)` for sessions that only contain hook and system records. Inferred titles are dimmed in the list so a guess never looks like a real title.
-
-Opening a session runs one deeper pass over the file to derive statistics, the timeline, and the preview together. Everything on the detail tabs comes from that single pass.
-
-## How it works
-
-Claude Code encodes each project path into a folder name by replacing every character outside `[a-zA-Z0-9]` with `-` (verified against real data: `/home/user/.claude-mem` becomes `-home-user--claude-mem`). The encoding is lossy, so Lazy Claude never decodes folder names. Matching always goes forward, from a known path to its encoded form, and unknown folders are resolved through the `cwd` values recorded inside their session files.
-
-Nested projects need care: `/a/foo-bar` shares the encoded prefix of `/a/foo`, so a name match alone cannot distinguish a sub-project from a sibling. A folder is treated as nested only when a history entry under the source encodes exactly to its name, or when its session files record a cwd inside the source.
-
-Moves and repairs run as journaled multi-step operations: back up `history.jsonl`, move or merge folders, rewrite history entries. If any step fails, completed steps are undone in reverse order.
-
-Archiving moves a session file to `~/.claude/lazy-claude/archive/<encoded-project>/`, outside the projects directory, so Claude Code stops listing it until restored. Move and repair keep archive folders in sync with their projects.
-
-The data directory resolves in this order: `LAZY_CLAUDE_CLAUDE_DIR` (useful for tests), `CLAUDE_CONFIG_DIR` (the same variable Claude Code respects), then `~/.claude`.
+https://github.com/user-attachments/assets/1a9a7ca4-f129-4eeb-96b2-6297c67345ed
 
 ## Supported platforms
 
@@ -240,64 +420,30 @@ The data directory resolves in this order: `LAZY_CLAUDE_CLAUDE_DIR` (useful for 
 | macOS    | expected to work, including case-insensitive path canonicalization |
 | Windows  | designed for, not yet tested                                       |
 
-All filesystem work uses Node.js APIs, path handling is separator-aware, the encoding treats `\` and `:` the same way Claude Code does on Windows, and cross-device moves fall back to copy-and-delete. The only runtime dependencies are `ink`, `react`, and `tar`.
+All filesystem work uses Node.js APIs, path handling is separator-aware, the encoding treats `\` and `:` the way Claude Code does on Windows, and cross-device moves fall back to copy-and-delete. The only runtime dependencies are `ink`, `react` and `tar`.
 
-## Architecture
+## Documentation
 
-```
-src/
-  cli.tsx                entry point and usage text
-  cli/
-    args.ts              flag parsing
-    prompt.ts            interactive confirmation and selection
-    commands.ts          one function per CLI command
-  core/
-    paths.ts             data directory resolution and path encoding
-    fuzzy.ts             fzf-style subsequence matching and scoring
-    jsonl.ts             head/tail chunk readers and record streaming
-    fsx.ts               move/merge/copy primitives with cross-device fallbacks
-    history.ts           history.jsonl read/rewrite/remove/append
-    nested.ts            nested project folder detection
-    journal.ts           undo journal for rollback
-    format.ts            size, time, duration and token formatting
-  services/
-    DiscoveryService.ts        project discovery
-    SessionService.ts          session list/archive/restore/delete/validate
-    SessionMetadataService.ts  titles and per-session metadata, cached
-    ConversationService.ts     statistics, timeline and preview parsing
-    MetadataCache.ts           versioned on-disk cache, the seam for indexing
-    WorkspaceResolver.ts       cwd to project, for `lazyclaude .`
-    FilterService.ts           generic ranked filtering over documents
-    SearchService.ts           what projects and sessions are searchable by
-    ProjectService.ts          project info and removal
-    MoveService.ts             journaled project moves
-    RepairService.ts           broken reference detection and relinking
-    BackupService.ts           history.jsonl backup create/list/restore/delete
-    PackService.ts             .claudepack pack/unpack
-    LauncherService.ts         resume handoff to Claude Code, launch modes
-    DiagnosticsService.ts      health check, prune, doctor
-    relocate.ts                shared folder-rename and history-rewrite logic
-  ui/                    Ink components: App, panels, rows, detail tabs
-    overlay/
-      OverlayContext.tsx   overlay stack, plus the input-gating hooks
-      OverlayHost.tsx      renders the stack as the last root sibling
-      Modal.tsx            absolutely positioned, opaque modal frame
-      dialogs.tsx          confirm, input, picker, output, action menu
+- [Architecture](docs/architecture.md), for anyone changing the code
+- [Command palette design](docs/superpowers/specs/2026-08-03-command-palette-design.md)
+- [Claude Code sessions documentation](https://code.claude.com/docs/en/sessions), the upstream format this relies on
+
+One caveat worth stating plainly: this depends on an on-disk layout that is internal to Claude Code and changes between versions.
+
+## Contributing
+
+```bash
+git clone https://github.com/brunos3d/lazy-claude.git
+cd lazy-claude
+npm install
+npm run dev       # tsc --watch
+npm test          # tsc, then node --test over the compiled output
+npm link          # try your build as lazyclaude
 ```
 
-The overlay system is one place, not one implementation per dialog. `OverlayProvider` holds a stack, `OverlayHost` renders it as the final sibling of a `position="relative"` root (Ink composites siblings in order, which is what puts dialogs on top), and `Modal` paints every interior line as a full-width `Text` with a background colour so the UI behind cannot bleed through. Input is gated centrally: `useOverlayInput` only fires for the top overlay and `useAppInput` only fires when the stack is empty. A new dialog type means adding a spec to the union and a case to the host.
+Running the tests needs Node 21 or newer, while the published CLI supports Node 18. There is no linter or formatter; `tsc` under `strict` is the type check.
 
-The UI contains no parsing or business logic. Every record shape Claude Code writes is understood in exactly one place: `SessionMetadataService` for cheap per-session facts and `ConversationService` for the deep pass. Both the CLI commands and the TUI flows call the same services, so a new operation means adding a service function, a command, and an entry in the action menu.
-
-Search takes documents rather than raw sessions, and `MetadataCache` is versioned and staleness-checked. When a full-text index over prompts and file names lands, it populates the `keywords` field and everything downstream keeps working unchanged.
-
-## Roadmap
-
-- Full-text index over prompts, assistant summaries, and modified files
-- Bulk actions (archive or delete sessions by age, clean up empty sessions)
-- Resume a session directly from the TUI
-- Project aliases so long paths get short names
-- Homebrew and AUR packaging once the npm release is out
+Read [docs/architecture.md](docs/architecture.md) first. It explains the layer separation, the journaled mutations, and why the on-disk encoding is never decoded. Issues and pull requests are welcome.
 
 ## Credits
 
