@@ -2,21 +2,43 @@
 import React from 'react';
 import { render } from 'ink';
 import { createRequire } from 'node:module';
-import { claudeDir, projectsDir } from './lib/paths.js';
-import { discoverProjects } from './lib/projects.js';
+import { runCommand } from './cli/commands.js';
 import { App } from './ui/App.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
-const USAGE = `lazy-claude ${version}: a LazyGit-style TUI for Claude Code sessions
+const USAGE = `lazy-claude ${version}: a LazyGit-style manager for Claude Code sessions
 
 Usage:
-  lazy-claude           Open the TUI (also available as lzc)
-  lazy-claude list      Print discovered projects as JSON
-  lazy-claude doctor    Show data directory and discovery stats
-  lazy-claude --help    Show this help
-  lazy-claude --version Show version
+  lazy-claude                          Open the TUI (also available as lzc)
+
+  lazy-claude list [--json]            List all projects
+  lazy-claude sessions [archived]      List all sessions
+  lazy-claude info [path] [--json]     Project details (defaults to cwd)
+  lazy-claude doctor                   Environment summary
+  lazy-claude verify                   Health check
+
+  lazy-claude move <src> <dest>        Move a project and migrate references
+  lazy-claude move --here <src>        Move a project into the current dir
+  lazy-claude repair                   Scan and relink broken references
+  lazy-claude repair <new-path>        Relink a moved project by its new path
+  lazy-claude repair --from A --to B   Relink explicitly
+  lazy-claude prune                    Remove orphaned session folders
+  lazy-claude remove <path>            Delete a project and all session data
+
+  lazy-claude pack <path> [archive]    Pack project + sessions to .claudepack
+  lazy-claude unpack <archive> <dest>  Restore a .claudepack elsewhere
+
+  lazy-claude backup [create|list|restore <name>|delete <name>]
+  lazy-claude session <archive|restore|delete|check> <session-id>
+
+Options:
+  -n, --dry-run    Preview without changing anything
+  -f, --force      Skip confirmation prompts
+  -p, --parents    Create missing parent directories
+  --no-backup      Skip the automatic history.jsonl backup
+  --json           JSON output (list, sessions, info)
 
 Environment:
   LAZY_CLAUDE_CLAUDE_DIR  Override the Claude data directory
@@ -30,36 +52,21 @@ async function main() {
     console.log(version);
     return;
   }
-  if (args.includes('--help') || args.includes('-h')) {
+  if (args.includes('--help') || args.includes('-h') || args[0] === 'help') {
     console.log(USAGE);
     return;
   }
 
   const command = args[0];
-
-  if (command === 'list') {
-    const projects = await discoverProjects();
-    projects.sort((a, b) => b.lastActivity - a.lastActivity);
-    console.log(JSON.stringify(projects, null, 2));
-    return;
-  }
-
-  if (command === 'doctor') {
-    console.log(`lazy-claude ${version}`);
-    console.log(`claude dir: ${claudeDir()}`);
-    console.log(`projects dir: ${projectsDir()}`);
-    const projects = await discoverProjects();
-    const sessions = projects.reduce((sum, p) => sum + p.sessions, 0);
-    const orphans = projects.filter((p) => p.orphaned).length;
-    console.log(`projects: ${projects.length} (${orphans} orphaned)`);
-    console.log(`sessions: ${sessions}`);
-    return;
-  }
-
   if (command) {
-    console.error(`Unknown command: ${command}\n`);
-    console.error(USAGE);
-    process.exitCode = 1;
+    const code = await runCommand(command, args.slice(1));
+    if (code === -1) {
+      console.error(`Unknown command: ${command}\n`);
+      console.error(USAGE);
+      process.exitCode = 1;
+    } else {
+      process.exitCode = code;
+    }
     return;
   }
 

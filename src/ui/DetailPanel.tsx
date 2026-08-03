@@ -1,9 +1,9 @@
 import React from 'react';
 import os from 'node:os';
 import { Box, Text } from 'ink';
-import type { Project } from '../lib/projects.js';
-import type { SessionDetail, SessionEntry } from '../lib/sessions.js';
-import { formatBytes, formatKb, formatRelativeTime, shortenPath } from '../lib/format.js';
+import type { Project } from '../services/DiscoveryService.js';
+import type { SessionDetail, SessionEntry } from '../services/SessionService.js';
+import { formatBytes, formatKb, formatRelativeTime, shortenPath } from '../core/format.js';
 import { Panel } from './Panel.js';
 
 interface DetailPanelProps {
@@ -53,6 +53,9 @@ export function DetailPanel({
               value={`${formatBytes(session.sizeBytes)}${session.archived ? '  [archived]' : ''}`}
             />
             {detail?.summary ? <Row label="Summary" value={detail.summary} /> : null}
+            {detail && detail.invalidRecords > 0 ? (
+              <Row label="Integrity" value={`${detail.invalidRecords} invalid record(s) in scanned range`} />
+            ) : null}
             {detail?.firstMessage ? (
               <Box marginTop={1} flexDirection="column">
                 <Text dimColor>First message</Text>

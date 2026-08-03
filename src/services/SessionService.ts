@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 import { createReadStream } from 'node:fs';
-import { archiveDir, projectsDir } from './paths.js';
+import { archiveDir, projectsDir } from '../core/paths.js';
+import { moveFile } from '../core/fsx.js';
 
 export interface SessionEntry {
   /** Session id, the JSONL filename without extension. */
@@ -27,6 +28,42 @@ export interface SessionDetail {
   startedAt?: string;
   /** Number of JSONL records scanned (capped). */
   scannedRecords: number;
+  /** Lines in the scanned range that failed to parse as JSON. */
+  invalidRecords: number;
+}
+
+export interface SessionIntegrity {
+  totalLines: number;
+  validRecords: number;
+  invalidLines: number;
+  ok: boolean;
+}
+
+/**
+ * Full integrity scan of a session file: every line must parse as JSON.
+ */
+export async function validateSession(session: SessionEntry): Promise<SessionIntegrity> {
+  let totalLines = 0;
+  let validRecords = 0;
+  const stream = createReadStream(session.file, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      totalLines += 1;
+      try {
+        JSON.parse(line);
+        validRecords += 1;
+      } catch {
+        // invalid line
+      }
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+  const invalidLines = totalLines - validRecords;
+  return { totalLines, validRecords, invalidLines, ok: invalidLines === 0 };
 }
 
 async function listJsonlFiles(dir: string, encoded: string, archived: boolean): Promise<SessionEntry[]> {
@@ -120,20 +157,32 @@ export async function restoreSession(session: SessionEntry): Promise<void> {
   }
 }
 
-/** Rename with a copy-and-delete fallback for cross-device moves. */
-async function moveFile(from: string, to: string): Promise<void> {
-  try {
-    await fs.rename(from, to);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
-    await fs.copyFile(from, to);
-    await fs.rm(from);
-  }
-}
-
 /** Permanently delete a session file. */
 export async function deleteSession(session: SessionEntry): Promise<void> {
   await fs.rm(session.file);
+}
+
+/**
+ * Find a session by id or unique id prefix, searching live sessions first
+ * and archived ones second. Used by CLI session commands.
+ */
+export async function findSessionById(
+  idOrPrefix: string,
+  options: { preferArchived?: boolean } = {},
+): Promise<SessionEntry | null> {
+  const live = await listAllSessions();
+  const archived = await listAllArchivedSessions();
+  const pools = options.preferArchived ? [archived, live] : [live, archived];
+  for (const pool of pools) {
+    const exact = pool.find((s) => s.id === idOrPrefix);
+    if (exact) return exact;
+    const matches = pool.filter((s) => s.id.startsWith(idOrPrefix));
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      throw new Error(`Session id prefix is ambiguous: ${idOrPrefix} (${matches.length} matches)`);
+    }
+  }
+  return null;
 }
 
 const MAX_SCAN_RECORDS = 200;
@@ -158,7 +207,7 @@ export function readSessionDetail(session: SessionEntry): Promise<SessionDetail>
 }
 
 async function scanSessionFile(file: string, maxRecords: number): Promise<SessionDetail> {
-  const detail: SessionDetail = { scannedRecords: 0 };
+  const detail: SessionDetail = { scannedRecords: 0, invalidRecords: 0 };
   const stream = createReadStream(file, { encoding: 'utf8' });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -172,6 +221,7 @@ async function scanSessionFile(file: string, maxRecords: number): Promise<Sessio
       try {
         record = JSON.parse(line) as Record<string, unknown>;
       } catch {
+        detail.invalidRecords += 1;
         continue;
       }
 
