@@ -9,7 +9,7 @@ export interface WorkspaceMatch {
 
 /**
  * Resolves a working directory to a known Claude Code project, so
- * `lazy-claude .` can open straight into the right project the way
+ * `lazyclaude .` can open straight into the right project the way
  * lazygit opens in the current repository.
  */
 class WorkspaceResolverImpl {
@@ -38,7 +38,7 @@ class WorkspaceResolverImpl {
   /**
    * True when an argument should be treated as a workspace to open rather
    * than a command. Covers `.`, `..`, `~`, and any absolute or relative
-   * path, so `lazy-claude .` and `lazy-claude ~/code/app` behave the same.
+   * path, so `lazyclaude .` and `lazyclaude ~/code/app` behave the same.
    */
   looksLikePath(arg: string | undefined): boolean {
     if (!arg) return false;

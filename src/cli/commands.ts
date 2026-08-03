@@ -50,7 +50,7 @@ const commands: Record<string, Command> = {
     }
     const broken = projects.filter((p) => !p.exists && !p.orphaned).length;
     console.log(
-      `\n${projects.length} projects, ${broken} with missing paths. Run 'lazy-claude repair' to relink.`,
+      `\n${projects.length} projects, ${broken} with missing paths. Run 'lazyclaude repair' to relink.`,
     );
     return 0;
   },
@@ -85,7 +85,7 @@ const commands: Record<string, Command> = {
   async search({ positional, flags }) {
     const query = positional.join(' ');
     if (!query.trim()) {
-      console.error('Usage: lazy-claude search <query>');
+      console.error('Usage: lazyclaude search <query>');
       return 1;
     }
     const sessions = [...(await listAllSessions()), ...(await listAllArchivedSessions())];
@@ -121,7 +121,7 @@ const commands: Record<string, Command> = {
   async show({ positional, flags }) {
     const id = positional[0];
     if (!id) {
-      console.error('Usage: lazy-claude show <session-id>');
+      console.error('Usage: lazyclaude show <session-id>');
       return 1;
     }
     const session = await findSessionById(id);
@@ -209,7 +209,7 @@ const commands: Record<string, Command> = {
   async move({ positional, flags }) {
     const source = positional[0];
     if (!source) {
-      console.error('Usage: lazy-claude move <source> <destination> [-n] [-f] [-p] [--here]');
+      console.error('Usage: lazyclaude move <source> <destination> [-n] [-f] [-p] [--here]');
       return 1;
     }
     const options = {
@@ -261,7 +261,7 @@ const commands: Record<string, Command> = {
       const matches = await RepairService.matchBrokenByName(positional[0]);
       if (matches.length === 0) {
         console.error(`No broken references found matching '${positional[0]}'`);
-        console.error(`Try: lazy-claude repair --from <old-path> --to ${positional[0]}`);
+        console.error(`Try: lazyclaude repair --from <old-path> --to ${positional[0]}`);
         return 1;
       }
       let from = matches[0].path;
@@ -295,7 +295,7 @@ const commands: Record<string, Command> = {
       console.log(`  x ${b.path}`);
       const candidates = await RepairService.findCandidates(b);
       if (candidates.length === 0) {
-        console.log(`    No matching directory found. Use: lazy-claude repair --from "${b.path}" --to <new-path>\n`);
+        console.log(`    No matching directory found. Use: lazyclaude repair --from "${b.path}" --to <new-path>\n`);
         continue;
       }
       let target: string | null = null;
@@ -328,7 +328,7 @@ const commands: Record<string, Command> = {
   async remove({ positional, flags }) {
     const target = positional[0];
     if (!target) {
-      console.error('Usage: lazy-claude remove <project-path> [-n] [-f] [--no-backup]');
+      console.error('Usage: lazyclaude remove <project-path> [-n] [-f] [--no-backup]');
       return 1;
     }
     if (
@@ -352,7 +352,7 @@ const commands: Record<string, Command> = {
   async pack({ positional, flags }) {
     const source = positional[0];
     if (!source) {
-      console.error('Usage: lazy-claude pack <project-path> [archive-path] [-f]');
+      console.error('Usage: lazyclaude pack <project-path> [archive-path] [-f]');
       return 1;
     }
     const report = await PackService.pack({
@@ -361,14 +361,14 @@ const commands: Record<string, Command> = {
       force: flags.force,
     });
     printSteps(report.steps);
-    console.log(`\nUnpack elsewhere with: lazy-claude unpack ${report.archive} <destination>`);
+    console.log(`\nUnpack elsewhere with: lazyclaude unpack ${report.archive} <destination>`);
     return 0;
   },
 
   async unpack({ positional, flags }) {
     const [archive, destination] = positional;
     if (!archive || !destination) {
-      console.error('Usage: lazy-claude unpack <archive.claudepack> <destination> [-f] [-p]');
+      console.error('Usage: lazyclaude unpack <archive.claudepack> <destination> [-f] [-p]');
       return 1;
     }
     const report = await PackService.unpack({
@@ -436,7 +436,7 @@ const commands: Record<string, Command> = {
     if (sub === 'restore') {
       const name = positional[1];
       if (!name) {
-        console.error('Usage: lazy-claude backup restore <backup-file-or-name>');
+        console.error('Usage: lazyclaude backup restore <backup-file-or-name>');
         return 1;
       }
       const backups = await BackupService.list();
@@ -471,7 +471,7 @@ const commands: Record<string, Command> = {
   async session({ positional, flags }) {
     const [sub, id] = positional;
     if (!sub || !id || !['archive', 'restore', 'delete', 'check'].includes(sub)) {
-      console.error('Usage: lazy-claude session <archive|restore|delete|check> <session-id>');
+      console.error('Usage: lazyclaude session <archive|restore|delete|check> <session-id>');
       return 1;
     }
     const session = await findSessionById(id, { preferArchived: sub === 'restore' });

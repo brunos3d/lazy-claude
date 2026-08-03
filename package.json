@@ -22,7 +22,9 @@
     "ink"
   ],
   "bin": {
+    "lazyclaude": "dist/cli.js",
     "lazy-claude": "dist/cli.js",
+    "lazy-claude-tui": "dist/cli.js",
     "lzc": "dist/cli.js"
   },
   "files": [

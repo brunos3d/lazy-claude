@@ -16,7 +16,7 @@ Finding and resuming
 - Sessions listed by their real title, the same one Claude Code's resume picker shows, with branch, age, and size beside them
 - Fuzzy search (`/`) in both panels, fzf-style: `lz` finds `lazy-claude`, `vrt` finds `vortex-platform`, with matched characters highlighted and results ranked by match quality
 - Resume in Claude Code (`e`), or resume with permission prompts skipped (`E`), handing the terminal over from the project's own directory
-- Open straight into a workspace with `lazy-claude .` or `lazy-claude <path>`
+- Open straight into a workspace with `lazyclaude .` or `lazyclaude <path>`
 
 Understanding a session
 
@@ -42,7 +42,7 @@ Interface
 
 ## Installation
 
-The package is published as `lazy-claude-tui`. The commands it installs are `lazy-claude` and the short alias `lzc`.
+The package is published as `lazy-claude-tui`. The main command is `lazyclaude`, with `lazy-claude`, `lazy-claude-tui` and `lzc` installed as aliases for it. All four run the same binary, so pick whichever you prefer to type.
 
 ```bash
 npm install -g lazy-claude-tui
@@ -76,15 +76,15 @@ From source:
 git clone https://github.com/brunos3d/lazy-claude.git
 cd lazy-claude
 npm install       # builds via the prepare script
-npm link          # exposes lazy-claude and lzc globally
+npm link          # exposes lazyclaude and its aliases globally
 ```
 
 ## TUI
 
 ```bash
-lazy-claude          # browse every project
-lazy-claude .        # open the current workspace directly
-lazy-claude ~/code/app
+lazyclaude          # browse every project
+lazyclaude .        # open the current workspace directly
+lazyclaude ~/code/app
 ```
 
 The left column is a hierarchy: projects on top, the selected project's sessions below. Both stay on screen, so the workspace you are in never disappears while you browse its sessions. The wide panel on the right follows focus, showing the project summary while Projects has focus and the session details once Sessions or Details does, with tabs for overview, conversation preview, timeline, and file activity.
@@ -135,34 +135,34 @@ The footer stays about navigation. Only the frequent per-item actions keep a glo
 Everything in the TUI is also a command. The CLI and TUI share the same service layer, so behavior is identical.
 
 ```bash
-lazy-claude list [--json]            # all projects with status
-lazy-claude sessions [archived]      # all sessions, titled
-lazy-claude show <session-id>        # stats, preview and timeline
-lazy-claude search <query>           # match titles, ids, paths, branches
-lazy-claude info [path] [--json]     # project details (defaults to cwd)
-lazy-claude doctor                   # environment summary
-lazy-claude verify                   # health check (exit 1 when issues found)
+lazyclaude list [--json]            # all projects with status
+lazyclaude sessions [archived]      # all sessions, titled
+lazyclaude show <session-id>        # stats, preview and timeline
+lazyclaude search <query>           # match titles, ids, paths, branches
+lazyclaude info [path] [--json]     # project details (defaults to cwd)
+lazyclaude doctor                   # environment summary
+lazyclaude verify                   # health check (exit 1 when issues found)
 
-lazy-claude move <src> <dest>        # move project + migrate references
-lazy-claude move --here <src>        # move project into the current dir
-lazy-claude repair                   # scan and relink broken references
-lazy-claude repair <new-path>        # relink a moved project by new path
-lazy-claude repair --from A --to B   # relink explicitly
-lazy-claude prune                    # remove orphaned session folders
-lazy-claude remove <path>            # delete project + all session data
+lazyclaude move <src> <dest>        # move project + migrate references
+lazyclaude move --here <src>        # move project into the current dir
+lazyclaude repair                   # scan and relink broken references
+lazyclaude repair <new-path>        # relink a moved project by new path
+lazyclaude repair --from A --to B   # relink explicitly
+lazyclaude prune                    # remove orphaned session folders
+lazyclaude remove <path>            # delete project + all session data
 
-lazy-claude pack <path> [archive]    # create .claudepack
-lazy-claude unpack <archive> <dest>  # restore .claudepack
+lazyclaude pack <path> [archive]    # create .claudepack
+lazyclaude unpack <archive> <dest>  # restore .claudepack
 
-lazy-claude backup                   # list history backups
-lazy-claude backup create
-lazy-claude backup restore <name>
-lazy-claude backup delete <name>
+lazyclaude backup                   # list history backups
+lazyclaude backup create
+lazyclaude backup restore <name>
+lazyclaude backup delete <name>
 
-lazy-claude session archive <id>     # ids accept unique prefixes
-lazy-claude session restore <id>
-lazy-claude session delete <id>
-lazy-claude session check <id>       # integrity scan
+lazyclaude session archive <id>     # ids accept unique prefixes
+lazyclaude session restore <id>
+lazyclaude session delete <id>
+lazyclaude session check <id>       # integrity scan
 ```
 
 Common flags: `-n/--dry-run`, `-f/--force`, `-p/--parents`, `--no-backup`, `--json`.
@@ -177,15 +177,15 @@ Two built-ins touch this area, and they solve different problems. `/cd` changes 
 | ------------------------------ | ----------------------------------------- | -------------------- | ------------------------ | ------------------------- | --------------------------------- |
 | `/cd`                          | the one open session                      | Yes                  | Yes, from v2.1.169       | No, one at a time         | Internal to Claude Code           |
 | `/add-dir`                     | the one open session                      | Yes                  | No                       | No                        | No                                |
-| `lazy-claude move`             | a project and every session bound to it   | No                   | Yes, project and folders | Yes                       | No                                |
-| `lazy-claude repair`           | same, when the directory already moved    | No                   | Yes, session folders     | Yes                       | No                                |
-| `lazy-claude pack` / `unpack`  | one project, archived and restored        | No                   | Yes                      | Yes                       | Yes, on unpack                    |
+| `lazyclaude move`              | a project and every session bound to it   | No                   | Yes, project and folders | Yes                       | No                                |
+| `lazyclaude repair`            | same, when the directory already moved    | No                   | Yes, session folders     | Yes                       | No                                |
+| `lazyclaude pack` / `unpack`   | one project, archived and restored        | No                   | Yes                      | Yes                       | Yes, on unpack                    |
 
-`lazy-claude move` operates on a project rather than a session. It moves the directory, renames the session folder for every session bound to it, migrates the folders of nested sub-projects and worktrees, updates `history.jsonl`, and keeps archived sessions in sync. Nothing has to be resumed. `lazy-claude repair` performs the same relocation when the directory was already moved with `mv`. Both accept `-n/--dry-run` to print the plan first, and both run as journaled operations that undo completed steps if a later one fails.
+`lazyclaude move` operates on a project rather than a session. It moves the directory, renames the session folder for every session bound to it, migrates the folders of nested sub-projects and worktrees, updates `history.jsonl`, and keeps archived sessions in sync. Nothing has to be resumed. `lazyclaude repair` performs the same relocation when the directory was already moved with `mv`. Both accept `-n/--dry-run` to print the plan first, and both run as journaled operations that undo completed steps if a later one fails.
 
 Use `/cd` for a single live session you are working in right now. Use Lazy Claude when relocating a repository together with its full history, or repairing one that already moved. There is no built-in bulk equivalent; the open request is [anthropics/claude-code#27473](https://github.com/anthropics/claude-code/issues/27473).
 
-One caveat worth stating plainly: this depends on an on-disk layout that is internal to Claude Code and changes between versions. `move`, `repair`, `remove`, and `unpack` back up `history.jsonl` first (unless `--no-backup`), but that backup does not include transcripts. For a full snapshot before a large change, run `lazy-claude pack`. See the [sessions documentation](https://code.claude.com/docs/en/sessions).
+One caveat worth stating plainly: this depends on an on-disk layout that is internal to Claude Code and changes between versions. `move`, `repair`, `remove`, and `unpack` back up `history.jsonl` first (unless `--no-backup`), but that backup does not include transcripts. For a full snapshot before a large change, run `lazyclaude pack`. See the [sessions documentation](https://code.claude.com/docs/en/sessions).
 
 ## Resuming a session
 
@@ -266,7 +266,7 @@ src/
     SessionMetadataService.ts  titles and per-session metadata, cached
     ConversationService.ts     statistics, timeline and preview parsing
     MetadataCache.ts           versioned on-disk cache, the seam for indexing
-    WorkspaceResolver.ts       cwd to project, for `lazy-claude .`
+    WorkspaceResolver.ts       cwd to project, for `lazyclaude .`
     FilterService.ts           generic ranked filtering over documents
     SearchService.ts           what projects and sessions are searchable by
     ProjectService.ts          project info and removal
