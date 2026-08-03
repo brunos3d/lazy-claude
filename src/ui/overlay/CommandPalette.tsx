@@ -201,17 +201,41 @@ export function CommandPalette({
     return list;
   }, [query, hitGroups]);
 
+  /**
+   * Which tab enter would act on, when the user has not picked one.
+   *
+   * Not the first tab. Tab order is fixed so a kind of result is always in
+   * the same place, but fuzzy subsequence matching means a long project
+   * path matches almost any word, so "repair" would otherwise open on a
+   * project that merely contains those letters in order. Every provider
+   * scores through FilterService, whose tiers dominate the score, so the
+   * highest scoring group is the one that matched most directly.
+   */
+  const bestIndex = useMemo(() => {
+    if (!query.trim()) return 0;
+    let best = 0;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    groups.forEach((group, i) => {
+      if (!('hits' in group)) return;
+      // Providers return their hits already ranked, so the first is the best.
+      const top = group.hits[0]?.score ?? Number.NEGATIVE_INFINITY;
+      if (top > bestScore) {
+        bestScore = top;
+        best = i;
+      }
+    });
+    return best;
+  }, [groups, query]);
+
   // The active tab is derived, never stored as an index. SearchEngine drops
-  // empty groups, so falling back to the first group is exactly the "never
-  // land on an empty tab" rule: if the category the user was on stops
-  // matching, they land on one that still has results rather than on
-  // nothing. Deriving it also means no effect can leave the two out of sync.
-  // With no query that first group is Recent when there is history and
+  // empty groups, so falling back is exactly the "never land on an empty
+  // tab" rule: if the category the user was on stops matching, they land on
+  // one that still has results rather than on nothing. Deriving it also
+  // means no effect can leave the two out of sync. With no query the
+  // fallback is the first group, which is Recent when there is history and
   // Actions otherwise.
-  const activeIndex = Math.max(
-    0,
-    groups.findIndex((group) => group.key === activeKey),
-  );
+  const chosenIndex = groups.findIndex((group) => group.key === activeKey);
+  const activeIndex = chosenIndex >= 0 ? chosenIndex : bestIndex;
   const activeGroup: PaletteGroup | null = groups[activeIndex] ?? null;
   const stateKey = activeGroup?.key ?? EMPTY_KEY;
 

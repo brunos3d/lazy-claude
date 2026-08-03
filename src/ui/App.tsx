@@ -1345,7 +1345,9 @@ function AppShell({ initialProject }: AppProps) {
               active={searching && focus === 'projects'}
               query={projectQuery}
               placeholder="Search projects (/)"
-              matches={projectItems.length}
+              // The "All sessions" row is a scope switch, not a project, so
+              // counting it would put the tally above the total.
+              matches={projectItems.filter((item) => item.kind === 'project').length}
               total={(projects ?? []).length}
               width={rowWidth}
               sort={ViewService.projectSortOption(view.projectSort).badge}

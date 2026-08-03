@@ -59,7 +59,7 @@ adding one to serve a filter that sorting already covers is not worth it.
 ## Workspace view state
 
 ```ts
-// src/services/view/types.ts
+// src/services/ViewService.ts
 export type SortDirection = 'asc' | 'desc';
 export interface SessionSort { field: 'modified' | 'size' | 'title'; direction: SortDirection }
 export interface ProjectSort { field: 'activity' | 'sessions' | 'size' | 'name'; direction: SortDirection }
@@ -72,8 +72,7 @@ export interface WorkspaceView {
 }
 ```
 
-`ViewService` (`src/services/view/ViewService.ts`) holds the only
-implementation of each sort and each filter predicate, plus the named option
+`ViewService` holds the only implementation of each sort and each filter predicate, plus the named option
 tables:
 
 ```ts
@@ -265,10 +264,20 @@ The active tab defaults to Recent when history exists, Actions otherwise.
 Seeing the tab is the discovery affordance; a returning user still lands on
 their recent searches.
 
-Action rows render with a leading check for `active` entries, red for
-`danger`, and no subtitle line unless the two line mode is on. The footer
-reads "enter runs" when the active tab holds actions and "enter jumps"
-otherwise.
+Action rows put the word `active` in the meta column for entries whose state
+is currently on, and render the title in red for `danger`. State does not get
+a check glyph: `Modal` rows pad their opaque background with `text.length`,
+so an ambiguous width character would leak the interface behind the row in
+terminals that draw it double width. The footer reads "enter runs" when the
+active tab holds actions and "enter jumps" otherwise.
+
+Tab order stays fixed, but which tab opens focused does not. Fuzzy
+subsequence matching means a long project path matches almost any word, so
+`repair` would open on a project that merely contains those letters in order.
+The palette focuses the group holding the highest scoring hit instead; every
+provider scores through `FilterService`, whose tiers dominate the score, so
+the winner is whichever group matched most directly. Switching tabs by hand
+pins the choice for as long as the palette is open.
 
 Selecting an action closes the palette before running it. Several actions
 open their own overlay, and running before closing would leave the palette
@@ -288,6 +297,10 @@ missing)`, so a filter can never be silently on.
 `esc` gains a step: clear the query, then clear the filter, then walk back
 up the focus hierarchy. Invisible state that survives an escape is how a
 filtered list starts looking like a bug.
+
+The search row's match counter keys off the counts rather than off the query
+for the same reason. A filter narrows the list with nothing typed, and a bare
+total sitting next to a shorter list reads as a miscount.
 
 ## Statistics
 

@@ -36,7 +36,7 @@ Three layers, strictly separated:
 - `src/services/` - all business logic and every read of Claude Code's on-disk format. Stateless module objects or singletons.
 - `src/ui/` (Ink/React) and `src/cli/` - two front ends over the same services. Neither parses session records or touches the filesystem directly.
 
-Adding an operation means: a service function, a command in `src/cli/commands.ts`, and an entry in `src/ui/actions/registry.ts`. Resist putting logic in either front end.
+Adding an operation means: a service function, a command in `src/cli/commands.ts`, and an entry in one of the two action surfaces. Resist putting logic in either front end.
 
 ### Claude Code's on-disk format
 
@@ -67,9 +67,32 @@ Input gating is central and non-negotiable: `useOverlayInput(id, ...)` fires onl
 
 A new dialog type means adding a spec to the `OverlaySpec` union in `OverlayContext.tsx` and a case in `OverlayHost`.
 
+### The two command surfaces
+
+`x` and `ctrl+k` divide by one mechanical rule, and it has to stay mechanical or both fill with the same entries.
+
+- `x` (`src/ui/actions/registry.ts`) acts on the highlighted project or session. Remove the selection and the entry has nothing to run against.
+- `ctrl+k` Actions (`src/services/actions/`) acts on the workspace or on how it is displayed, and reads no selection.
+
+`src/services/actions/` mirrors the search provider layer: a provider owns one category and returns `ActionSpec`s, `ActionRegistry` concatenates providers and stamps the category on so an action cannot claim a section its provider does not own, and `CATEGORY_ORDER` decides presentation the way `GROUP_ORDER` does for search. `ActionContext` carries the current view, a view setter, and the workspace handlers App already builds.
+
+Selecting an action does not run it in the palette. `SelectTarget` carries the action id, `onSelect` hands it back, and App dispatches. That is what keeps the palette free of every operation's semantics.
+
+Repair is the one entry in both surfaces, because `startRepair` targets the selected project when its directory is missing and otherwise opens a picker over every broken project.
+
+### Sorting and filtering are workspace state
+
+A chosen order holds until something else is chosen. `WorkspaceView` lives in `App.tsx`; `ViewService` holds the only implementation of each sort and each filter predicate, plus the `SESSION_SORTS`, `PROJECT_SORTS` and `PROJECT_FILTERS` tables that the sidebar popup (`s`) and the palette's sorting actions both read. A new sort is one row in a table and reaches both surfaces already wired.
+
+Lists apply filter, then either the query ranking or the sort. A query replaces the sort rather than composing with it: relevance ranking is itself an ordering, and re-sorting would throw it away.
+
+The project filter forced one subtlety. `planJump` returns an index into the full project list while `projectIndex` reads the rendered rows, so a jump clears both queries and the filter, which makes the two agree on the next render. Sorting is safe to leave applied because `planJump` matches on `encoded`. That is why `JumpActions` carries `clearProjectFilter`.
+
+Neither the sort nor the filter persists across restarts, and both stay visible while active: the sort on the right of each panel's search row, the filter in the panel title, cleared by `esc`.
+
 ### Global search and the command palette
 
-`ctrl+k` opens a palette that searches every project and session, separate from the per-panel `/` search. It navigates and nothing else; operations stay in the action palette (`x`).
+`ctrl+k` opens a palette that searches every project and session and runs workspace actions, separate from the per-panel `/` search.
 
 `src/services/search/` holds the whole engine and imports no UI:
 
@@ -81,7 +104,11 @@ Adding a searchable entity means writing a provider, registering it in `register
 
 `ConversationProvider` ships registered and disabled. Turning message search on is implementing that one file.
 
-The palette shows one category at a time, chosen by a tab bar under the input, and the active tab owns the whole result area. Tabs are derived from the groups the engine returns, so a category with no hits simply has no tab and the user can never land on an empty one. That is also why a disabled provider needs no special case. Tab and shift+tab cycle categories, and each tab keeps its own cursor and scroll offset so switching back and forth is lossless.
+A provider can set `browsable`, which makes it run on an empty query so its tab is visible before anything is typed. Only `ActionProvider` does: browsing every project would duplicate the sidebar in a tab, while an action nobody can see until they guess a matching word is not discoverable, and discovery is the reason the tab exists.
+
+The palette shows one category at a time, chosen by a tab bar under the input, and the active tab owns the whole result area. Tabs are derived from the groups the engine returns, so a category with no hits simply has no tab and the user can never land on an empty one. That is also why a disabled provider needs no special case. Recent searches are a tab too, built by the palette rather than a provider, since they refine the query instead of selecting anything. Tab and shift+tab cycle categories, and each tab keeps its own cursor and scroll offset so switching back and forth is lossless.
+
+Tab order is fixed by `GROUP_ORDER`, but which tab opens focused is not: the palette focuses the group holding the highest scoring hit. Subsequence matching means a long project path matches almost any word, so `repair` would otherwise land on a project that merely contains those letters in order. Switching tabs pins the choice until the palette closes.
 
 Ranking tiers live in `FilterService` and are shared: exact beats prefix beats substring beats subsequence, with the fuzzy score breaking ties inside a tier. The panel searches get this too.
 

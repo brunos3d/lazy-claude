@@ -20,6 +20,7 @@ Lazy Claude reads the same files Claude Code writes. Every session shows its rea
 - [Quick start](#quick-start)
 - [Interface overview](#interface-overview)
 - [Command palette](#command-palette)
+- [Sorting and filtering](#sorting-and-filtering)
 - [Session inspector](#session-inspector)
 - [Actions](#actions)
 - [Managing projects and sessions](#managing-projects-and-sessions)
@@ -44,7 +45,8 @@ Lazy Claude solves both without touching Claude Code itself. It reads the same m
 ## Features
 
 - Sessions listed by their real title, with branch, size and age beside them
-- Global command palette (`ctrl+k`) that searches every project and session at once
+- Global command palette (`ctrl+k`) that searches every project and session at once, and runs workspace commands
+- Sortable and filterable lists: order by date, size or name, or narrow to the projects that need attention
 - Fuzzy search (`/`) inside each panel, fzf-style, with matched characters highlighted
 - Session inspector with four tabs: overview statistics, conversation preview, activity timeline and file list
 - Resume in Claude Code from anywhere, with or without permission prompts
@@ -54,6 +56,7 @@ Lazy Claude solves both without touching Claude Code itself. It reads the same m
 - Pack a project and its sessions into a portable `.claudepack` archive
 - Timestamped `history.jsonl` backups before every mutation, with a manager to restore them
 - Health check, diagnostics and pruning for orphaned session folders
+- Workspace statistics: storage, counts, and the largest projects and sessions
 - Integrity check that validates every record in a session file
 - Dry-run mode on every destructive operation
 - Overlay dialogs that stack on top of the interface instead of replacing it
@@ -146,7 +149,7 @@ Dialogs are overlays, not screens. Confirmations, pickers, reports and the actio
 
 ## Command palette
 
-`ctrl+k` opens a global search over every project and session on the machine, live and archived. It exists because the per-panel `/` search only filters the list in front of you, which is no help when you cannot remember which project the work was in.
+`ctrl+k` opens a global search over every project and session on the machine, live and archived, and a list of workspace commands. It exists because the per-panel `/` search only filters the list in front of you, which is no help when you cannot remember which project the work was in, and because remembering that `M` refreshes metadata is not a reasonable thing to ask.
 
 ![Command palette searching projects and sessions](docs/screenshot-fuzzy-finder.png)
 
@@ -158,13 +161,39 @@ Type to search. Results are grouped into categories with a tab bar under the inp
 | `tab` / `shift+tab` | switch category             |
 | `↑` / `↓`       | move through results            |
 | `pgup` / `pgdn` | page through results            |
-| `enter`         | jump to the selected result     |
+| `enter`         | jump to the result, or run the action |
 | `ctrl+u`        | clear the query                 |
 | `esc`           | close                           |
 
-Jumping selects the result's project, loads its sessions, highlights the session and focuses the right panel. Jumping to an archived session flips the list to the archived view first. Recent searches appear when the input is empty.
+Jumping selects the result's project, loads its sessions, highlights the session and focuses the right panel. Jumping to an archived session flips the list to the archived view first.
 
-The palette navigates and nothing else. Operations stay in the action menu, which keeps both predictable.
+Open the palette with an empty input and the tabs show your recent searches and every action, so commands can be found by browsing rather than by knowing the name. The Actions tab groups them into Sorting, Filters, Workspace and Statistics:
+
+| Group      | What is in it                                                        |
+| ---------- | -------------------------------------------------------------------- |
+| Sorting    | order the sessions or projects list by date, size or name             |
+| Filters    | show archived sessions, or only projects that are missing, orphaned or empty |
+| Workspace  | rescan, refresh metadata, repair references, health check, diagnostics, backups, unpack, prune |
+| Statistics | storage, counts, and the largest projects and sessions                |
+
+Searching finds them by description as well as by name: `largest` reaches both size sorts and the statistics report, `repair` reaches the repair command, the health check and the missing-projects filter.
+
+The split between the two surfaces is deliberate. The action menu (`x`) acts on whatever is highlighted; the palette acts on the workspace as a whole or on how it is displayed. Nothing appears in both, apart from repair, which behaves differently from each.
+
+## Sorting and filtering
+
+Both lists keep an order and the projects list keeps a filter, and both hold until you change them. The active sort sits on the right of each panel's search row so the order is never a mystery.
+
+Press `s` to sort the focused list, or pick a sort from the command palette.
+
+| List     | Orders                                                                    |
+| -------- | ------------------------------------------------------------------------- |
+| Sessions | most recent, oldest, largest, smallest, title A to Z, title Z to A         |
+| Projects | recently active, least recently active, most sessions, largest, name A to Z |
+
+Filters come from the palette and narrow the projects list to what needs attention: missing on disk, orphaned, or empty. An active filter names itself in the panel title, and `esc` clears it.
+
+"Least recently active" is the one worth knowing about. It surfaces the projects you have not touched in months, which is usually the list you want before deciding what to delete.
 
 ## Session inspector
 
@@ -183,7 +212,7 @@ Titles come from the `ai-title` record Claude Code writes, the same one its resu
 
 ## Actions
 
-Press `x` for the action menu. It is the single place every operation lives, grouped into Session, Project, Maintenance and Dangerous, with the destructive group last and marked in red. Unavailable actions stay listed with the reason, so the menu doubles as documentation.
+Press `x` for the action menu. It holds the operations that act on the highlighted project or session, grouped into Session, Project and Dangerous, with the destructive group last and marked in red. Unavailable actions stay listed with the reason, so the menu doubles as documentation. Operations on the whole workspace are in the [command palette](#command-palette) instead.
 
 ![Project actions menu](docs/screenshot-project-actions-menu.png)
 
@@ -203,16 +232,9 @@ Inside the menu, `enter` runs the selection and typing a shortcut key runs it di
 | `F` | Repair references   | Project     |
 | `p` | Pack project        | Project     |
 | `i` | Project information | Project     |
-| `c` | Check integrity     | Maintenance |
-| `B` | Backup manager      | Maintenance |
-| `U` | Unpack archive      | Maintenance |
-| `V` | Health check        | Maintenance |
-| `g` | Run diagnostics     | Maintenance |
-| `R` | Rescan              | Maintenance |
-| `M` | Refresh metadata    | Maintenance |
+| `c` | Check integrity     | Session     |
 | `d` | Delete session      | Dangerous   |
 | `D` | Delete project      | Dangerous   |
-| `P` | Prune orphans       | Dangerous   |
 
 Destructive actions confirm first and show the exact planned steps.
 
@@ -313,7 +335,8 @@ Search
 | `enter`            | keep the filter, hand the keyboard back       |
 | `ctrl+u`           | clear the query without leaving search        |
 | `esc`              | clear the query and leave search              |
-| `ctrl+k`           | command palette, searches everything          |
+| `ctrl+k`           | command palette: search everything, run commands |
+| `s`                | sort the focused list                         |
 
 Inspector
 
@@ -335,7 +358,7 @@ Actions
 | `d` | delete the session permanently                      |
 | `c` | check session file integrity                        |
 
-Every other operation is reached through the action menu. Its shortcut keys are listed in [Actions](#actions) and work while the menu is open.
+The action menu holds the operations that act on the highlighted project or session. Its shortcut keys are listed in [Actions](#actions) and work while the menu is open. Operations on the whole workspace live in the command palette instead.
 
 General
 
@@ -356,6 +379,7 @@ lazyclaude sessions [archived]      # all sessions, titled
 lazyclaude show <session-id>        # stats, preview and timeline
 lazyclaude search <query>           # match titles, ids, paths, branches
 lazyclaude info [path] [--json]     # project details (defaults to cwd)
+lazyclaude stats [--json]           # storage, counts, largest projects
 lazyclaude doctor                   # environment summary
 lazyclaude verify                   # health check (exit 1 when issues found)
 
@@ -387,7 +411,7 @@ lazyclaude session check <id>       # integrity scan
 | `-f`, `--force`   | skip confirmation prompts                    |
 | `-p`, `--parents` | create missing parent directories            |
 | `--no-backup`     | skip the automatic `history.jsonl` backup    |
-| `--json`          | JSON output for `list`, `sessions` and `info` |
+| `--json`          | JSON output for `list`, `sessions`, `info` and `stats` |
 
 Session ids accept unique prefixes, so `lazyclaude show 155552ca` is enough.
 

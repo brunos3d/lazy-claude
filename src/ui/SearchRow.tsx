@@ -28,7 +28,10 @@ export function SearchRow({
   sort?: string;
 }) {
   const filtering = query.length > 0;
-  const counter = filtering ? `${matches}/${total}` : String(total);
+  // Keyed on the counts, not on the query: a workspace filter narrows the
+  // list without anything being typed, and a bare total next to a shorter
+  // list reads as a miscount.
+  const counter = matches !== total ? `${matches}/${total}` : String(total);
   // Dropped entirely on a narrow panel rather than truncated: half a sort
   // name reads as a rendering fault, a missing one reads as no room.
   const badge = sort && width >= 28 ? `↕ ${sort}` : '';

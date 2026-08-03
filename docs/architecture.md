@@ -39,7 +39,9 @@ src/
     MetadataCache.ts           versioned on-disk cache
     WorkspaceResolver.ts       cwd to project, for `lazyclaude .`
     FilterService.ts           ranked filtering over documents
-    SearchService.ts           what projects and sessions are searchable by
+    SearchService.ts           what projects, sessions and actions are searchable by
+    ViewService.ts             sorts, filters, and the named sort tables
+    StatsService.ts            workspace counts, storage and rankings
     ProjectService.ts          project info and removal
     MoveService.ts             journaled project moves
     RepairService.ts           broken reference detection and relinking
@@ -52,15 +54,18 @@ src/
       SearchIndexer.ts         the in-memory workspace index
       SearchEngine.ts          orchestration, group ordering, cancellation
       providers/               one per searchable entity
+    actions/                   workspace actions, the global command surface
+      ActionRegistry.ts        provider composition and category order
+      providers/               sorting, filters, workspace ops, statistics
   ui/                    Ink components: App, panels, rows, detail tabs
     keys.ts              global keybindings
-    actions/registry.ts  the action menu, generated from the selection
+    actions/registry.ts  the contextual action menu, from the selection
     overlay/
       OverlayContext.tsx overlay stack and the input-gating hooks
       OverlayHost.tsx    renders the stack as the last root sibling
       Modal.tsx          opaque modal frame
       dialogs.tsx        confirm, input, picker, output, action menu
-      CommandPalette.tsx the ctrl+k palette
+      CommandPalette.tsx the ctrl+k palette: navigation and workspace actions
 ```
 
 ## Claude Code's on-disk format
@@ -108,6 +113,8 @@ A new dialog type means adding a spec to the `OverlaySpec` union in `OverlayCont
 - `SearchEngine` owns orchestration: the `SearchContext`, the `AbortController` that cancels a superseded query, per-provider failure isolation, and `GROUP_ORDER`. Group ordering lives here, not on providers, so the same query always puts the same kind of result in the same place. Nothing is capped, because each group gets its own scrollable tab and a ceiling would only make results past it unreachable.
 - Providers own matching, one domain each, and are stateless and mutually independent. They delegate to `SearchService` so there stays exactly one fuzzy implementation.
 
+A provider can set `browsable`, which makes it run on an empty query so its tab is visible before anything is typed. Only `ActionProvider` does: browsing every project would duplicate the sidebar in a tab.
+
 Adding a searchable entity means writing a provider, registering it in `register.ts`, adding its `ResultKind` to `GROUP_ORDER`, and, if it navigates somewhere new, a `JumpTarget` variant plus a case in `useJumpTarget`. Nothing in `CommandPalette` or `SearchEngine` changes.
 
 `ConversationProvider` ships registered and disabled. Turning message search on is implementing that one file.
@@ -115,6 +122,28 @@ Adding a searchable entity means writing a provider, registering it in `register
 Jumping is two steps, because selecting a project starts an asynchronous session load. `useJumpTarget` applies what is immediate, then holds the target session file until the matching list arrives, keyed on `encoded|archived` so a jump into the archive never resolves against the live list.
 
 Ranking tiers live in `FilterService` and are shared with the panel searches: exact beats prefix beats substring beats subsequence, with the fuzzy score breaking ties inside a tier.
+
+Tab order is fixed by `GROUP_ORDER`, but which tab opens focused is not. The palette focuses the group holding the highest scoring hit, because subsequence matching means a long project path matches almost any word and `repair` would otherwise land on a project that merely contains those letters in order. Switching tabs pins the choice until the palette closes.
+
+## Two command surfaces
+
+`x` and `ctrl+k` divide by one mechanical rule. `x` acts on the highlighted project or session, so removing the selection leaves its entries with nothing to run against. The palette's Actions tab acts on the workspace or on how it is displayed, and reads no selection. Without a rule that sharp, both surfaces drift into listing everything the program can do.
+
+`src/services/actions/` mirrors the search provider layer: `ActionProvider` returns `ActionSpec`s for one category, `ActionRegistry` concatenates providers and stamps the category on so an action cannot claim a section its provider does not own, and `CATEGORY_ORDER` decides presentation the way `GROUP_ORDER` does for search. `ActionContext` carries the current view, a view setter, and the workspace handlers `App` already builds.
+
+Actions reach the palette through `ActionProvider` in `src/services/search/providers/`, ranked by `SearchService.filterActions` over title, subtitle and keywords. Keywords carry the searches nobody would guess the command name for: `largest` reaches both size sorts and the statistics report, `broken` reaches repair.
+
+Selecting an action does not run it in the palette. `SelectTarget` carries the action id, `onSelect` hands it back, and `App` dispatches, which is what keeps the palette free of every operation's semantics.
+
+## Sorting and filtering
+
+Sorting and filtering are workspace state, not one-off commands: a chosen order holds until something else is chosen. `WorkspaceView` lives in `App.tsx`; `ViewService` holds the only implementation of each sort and each filter predicate, plus the `SESSION_SORTS`, `PROJECT_SORTS` and `PROJECT_FILTERS` tables that the sidebar popup (`s`) and the palette's sorting actions both read. A new sort is one row in a table and reaches both surfaces already wired.
+
+Lists apply filter, then either the query ranking or the sort. A query replaces the sort rather than composing with it, because relevance ranking is itself an ordering and re-sorting would throw it away.
+
+The project filter forced one subtlety. `planJump` returns an index into the full project list while `projectIndex` reads the rendered rows, so a jump clears both queries and the filter, which makes the two agree on the next render. Sorting is safe to leave applied because `planJump` matches on `encoded`. That is why `JumpActions` carries `clearProjectFilter`.
+
+Neither the sort nor the filter persists across restarts, and both are visible while active: the sort on the right of each panel's search row, the filter in the panel title, cleared by `esc`.
 
 ## UI layout
 
