@@ -64,7 +64,7 @@ registerDefaultProviders();
 const QUICK_KEYS = new Set(['e', 'E', 'a', 'r', 'd', 'c']);
 
 export interface AppProps {
-  /** Project to open directly, from `lazy-claude <path>`. */
+  /** Project to open directly, from `lazyclaude <path>`. */
   initialProject?: string;
 }
 
@@ -420,7 +420,7 @@ function AppShell({ initialProject }: AppProps) {
               source: project.path,
               archive: expandHome(value),
             });
-            return [...report.steps, '', `Unpack with: lazy-claude unpack ${report.archive} <destination>`];
+            return [...report.steps, '', `Unpack with: lazyclaude unpack ${report.archive} <destination>`];
           });
         },
       });

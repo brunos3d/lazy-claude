@@ -16,35 +16,35 @@ const APP_TITLE = 'Lazy Claude';
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
-const USAGE = `lazy-claude ${version}: find, resume and manage Claude Code sessions
+const USAGE = `lazyclaude ${version}: find, resume and manage Claude Code sessions
 
 Usage:
-  lazy-claude                          Open the TUI
-  lazy-claude .                        Open the TUI on the current workspace
-  lazy-claude <path>                   Open the TUI on a specific project
-                                       (short alias: lzc)
+  lazyclaude                          Open the TUI
+  lazyclaude .                        Open the TUI on the current workspace
+  lazyclaude <path>                   Open the TUI on a specific project
+                                      (aliases: lazy-claude, lazy-claude-tui, lzc)
 
-  lazy-claude list [--json]            List all projects
-  lazy-claude sessions [archived]      List all sessions with titles
-  lazy-claude show <session-id>        Session stats, timeline and preview
-  lazy-claude search <query>           Search sessions by title, id or path
-  lazy-claude info [path] [--json]     Project details (defaults to cwd)
-  lazy-claude doctor                   Environment summary
-  lazy-claude verify                   Health check
+  lazyclaude list [--json]            List all projects
+  lazyclaude sessions [archived]      List all sessions with titles
+  lazyclaude show <session-id>        Session stats, timeline and preview
+  lazyclaude search <query>           Search sessions by title, id or path
+  lazyclaude info [path] [--json]     Project details (defaults to cwd)
+  lazyclaude doctor                   Environment summary
+  lazyclaude verify                   Health check
 
-  lazy-claude move <src> <dest>        Move a project and migrate references
-  lazy-claude move --here <src>        Move a project into the current dir
-  lazy-claude repair                   Scan and relink broken references
-  lazy-claude repair <new-path>        Relink a moved project by its new path
-  lazy-claude repair --from A --to B   Relink explicitly
-  lazy-claude prune                    Remove orphaned session folders
-  lazy-claude remove <path>            Delete a project and all session data
+  lazyclaude move <src> <dest>        Move a project and migrate references
+  lazyclaude move --here <src>        Move a project into the current dir
+  lazyclaude repair                   Scan and relink broken references
+  lazyclaude repair <new-path>        Relink a moved project by its new path
+  lazyclaude repair --from A --to B   Relink explicitly
+  lazyclaude prune                    Remove orphaned session folders
+  lazyclaude remove <path>            Delete a project and all session data
 
-  lazy-claude pack <path> [archive]    Pack project + sessions to .claudepack
-  lazy-claude unpack <archive> <dest>  Restore a .claudepack elsewhere
+  lazyclaude pack <path> [archive]    Pack project + sessions to .claudepack
+  lazyclaude unpack <archive> <dest>  Restore a .claudepack elsewhere
 
-  lazy-claude backup [create|list|restore <name>|delete <name>]
-  lazy-claude session <archive|restore|delete|check> <session-id>
+  lazyclaude backup [create|list|restore <name>|delete <name>]
+  lazyclaude session <archive|restore|delete|check> <session-id>
 
 Options:
   -n, --dry-run    Preview without changing anything
@@ -72,7 +72,7 @@ async function main() {
 
   const command = args[0];
 
-  // `lazy-claude .` and `lazy-claude <path>` open the TUI on that workspace.
+  // `lazyclaude .` and `lazyclaude <path>` open the TUI on that workspace.
   const workspaceArg = WorkspaceResolver.looksLikePath(command) ? command : undefined;
 
   if (command && !workspaceArg) {
@@ -100,7 +100,7 @@ async function main() {
   }
 
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
-    console.error('lazy-claude needs an interactive terminal. Try `lazy-claude list` instead.');
+    console.error('lazyclaude needs an interactive terminal. Try `lazyclaude list` instead.');
     process.exitCode = 1;
     return;
   }

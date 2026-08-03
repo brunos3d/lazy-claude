@@ -9,7 +9,7 @@ npm run build     # tsc + restore the executable bit on dist/cli.js
 npm run dev       # tsc --watch
 npm start         # node dist/cli.js
 npm test          # tsc, then node --test over the compiled output
-npm link          # expose `lazy-claude` and `lzc` globally from this checkout
+npm link          # expose `lazyclaude` (and the `lazy-claude`, `lazy-claude-tui`, `lzc` aliases) globally
 ```
 
 There is no linter or formatter configured. Tests use Node's built-in runner with no dependencies: sources and `*.test.ts` files sit side by side under `src/`, and `npm test` compiles then runs `node --test 'dist/**/*.test.js'`. Run it after changes; `tsc` under `strict` is still the type check.
