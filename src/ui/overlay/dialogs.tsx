@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Modal, ModalLine, blankLine, textLine, useModalWidth, wrapText } from './Modal.js';
 import {
   useOverlayInput,
@@ -9,7 +9,12 @@ import {
   type PickerSpec,
 } from './OverlayContext.js';
 import { useTerminalSize } from '../useTerminalSize.js';
-import { findShortcut, flattenActions } from '../actions/registry.js';
+import {
+  findShortcut,
+  flattenActions,
+  type ActionCategory,
+  type ActionDefinition,
+} from '../actions/registry.js';
 
 export type { ActionDefinition as Action } from '../actions/registry.js';
 
@@ -201,18 +206,87 @@ export function OutputDialog({ overlay, onClose }: { overlay: OutputSpec & { id:
   );
 }
 
+/** One rendered line of the palette. Only actions are selectable. */
+type MenuRow =
+  | { kind: 'spacer' }
+  | { kind: 'header'; category: ActionCategory }
+  | { kind: 'action'; category: ActionCategory; action: ActionDefinition; actionIndex: number };
+
+/** Columns consumed by the rail, cursor and shortcut key of an action row. */
+const ROW_PREFIX = 10;
+/** Below this, a description is more misleading than missing, so it is dropped. */
+const MIN_DESCRIPTION = 20;
+
 /**
  * Categorized command palette.
  *
  * Sections carry their own colour and a guide rail, so scanning happens by
  * group rather than by reading every row. Only actions are selectable;
  * headers and rules are skipped by the cursor.
+ *
+ * The palette grows past most terminals, so it is windowed: the body shows
+ * as many rows as the terminal has height for and scrolls with the cursor.
+ * Column widths follow the terminal too, and the description column drops
+ * entirely once there is no room for it.
  */
 export function ActionMenu({ overlay, onClose }: { overlay: ActionsSpec & { id: number }; onClose: () => void }) {
-  const width = useModalWidth(84);
+  const { rows: terminalRows } = useTerminalSize();
   const [index, setIndex] = useState(0);
+  const [scroll, setScroll] = useState(0);
 
   const flat = flattenActions(overlay.categories);
+
+  // Ask for exactly the width the widest row needs; useModalWidth caps it
+  // to the terminal, so wide terminals get whole descriptions and narrow
+  // ones get as much as they can hold.
+  const longestLabel = flat.reduce((max, action) => Math.max(max, action.label.length), 0);
+  const longestDescription = flat.reduce(
+    (max, action) => Math.max(max, action.description.length, (action.disabledReason ?? '').length),
+    0,
+  );
+  const width = useModalWidth(ROW_PREFIX + longestLabel + 2 + longestDescription + 2);
+
+  // Every line of the palette, headers and spacers included, so scrolling
+  // moves by what is on screen instead of by action.
+  const { rowList, rowOfAction } = useMemo(() => {
+    const list: MenuRow[] = [];
+    const byAction: number[] = [];
+    let actionIndex = 0;
+    overlay.categories.forEach((category, categoryIndex) => {
+      if (categoryIndex > 0) list.push({ kind: 'spacer' });
+      list.push({ kind: 'header', category });
+      for (const action of category.actions) {
+        byAction[actionIndex] = list.length;
+        list.push({ kind: 'action', category, action, actionIndex });
+        actionIndex += 1;
+      }
+    });
+    return { rowList: list, rowOfAction: byAction };
+  }, [overlay.categories]);
+
+  // Chrome is traded away as the terminal shrinks: first the breathing room
+  // around the body, then the rules. What is left always fits the height.
+  const compact = terminalRows < 18;
+  const tiny = terminalRows < 10;
+  const chrome = tiny ? 4 : compact ? 6 : 8; // border, title, rules, footer, padding
+  const viewport = Math.max(1, Math.min(rowList.length, terminalRows - chrome));
+  const maxScroll = Math.max(0, rowList.length - viewport);
+
+  /** Clamp an offset so the selected action, and its header, stay visible. */
+  const resolveOffset = (base: number, actionIndex: number) => {
+    const row = rowOfAction[actionIndex] ?? 0;
+    let next = Math.min(Math.max(0, base), maxScroll);
+    if (row < next) next = row;
+    else if (row >= next + viewport) next = row - viewport + 1;
+    if (rowList[row - 1]?.kind === 'header' && row - 1 < next) next = row - 1;
+    return Math.max(0, Math.min(next, maxScroll));
+  };
+
+  const select = (nextIndex: number) => {
+    const clamped = Math.max(0, Math.min(flat.length - 1, nextIndex));
+    setIndex(clamped);
+    setScroll((s) => resolveOffset(s, clamped));
+  };
 
   useOverlayInput(overlay.id, (input, key) => {
     if (key.escape || input === 'q') {
@@ -220,11 +294,19 @@ export function ActionMenu({ overlay, onClose }: { overlay: ActionsSpec & { id: 
       return;
     }
     if (key.upArrow || input === 'k') {
-      setIndex((i) => Math.max(0, i - 1));
+      select(index - 1);
       return;
     }
     if (key.downArrow || input === 'j') {
-      setIndex((i) => Math.min(flat.length - 1, i + 1));
+      select(index + 1);
+      return;
+    }
+    if (key.pageUp) {
+      select(index - viewport);
+      return;
+    }
+    if (key.pageDown) {
+      select(index + viewport);
       return;
     }
     if (key.return) {
@@ -242,72 +324,86 @@ export function ActionMenu({ overlay, onClose }: { overlay: ActionsSpec & { id: 
     }
   });
 
-  const labelWidth = 22;
-  const descWidth = Math.max(10, width - labelWidth - 14);
+  // Labels get the room they need before descriptions take the remainder.
+  // A description column too narrow to be read is dropped, which gives the
+  // labels the whole line on a narrow terminal.
+  const available = Math.max(4, width - ROW_PREFIX - 2);
+  const labelWidth = Math.max(4, Math.min(longestLabel, available));
+  const descWidth = available - labelWidth - 2;
+  const showDescriptions = descWidth >= MIN_DESCRIPTION;
 
-  // Running index across categories, so the cursor maps to the flat list.
-  let cursor = -1;
+  const offset = resolveOffset(scroll, index);
+  const rule = <ModalLine width={width} segments={[{ text: `  ${'─'.repeat(Math.max(0, width - 4))}`, dim: true }]} />;
+
+  const renderRow = (row: MenuRow, key: number) => {
+    if (row.kind === 'spacer') return <React.Fragment key={key}>{blankLine(width)}</React.Fragment>;
+    if (row.kind === 'header') {
+      return (
+        <ModalLine
+          key={key}
+          width={width}
+          segments={[
+            { text: '  ' },
+            { text: row.category.title, bold: true, color: row.category.accent },
+            ...(row.category.danger && width >= 60
+              ? [{ text: '   destructive, cannot be undone', dim: true, color: 'red' }]
+              : []),
+          ]}
+        />
+      );
+    }
+
+    const { action, category } = row;
+    const selected = row.actionIndex === index;
+    const trailing = action.disabled ? (action.disabledReason ?? 'unavailable') : action.description;
+    return (
+      <ModalLine
+        key={key}
+        width={width}
+        segments={[
+          { text: '  ' },
+          { text: '│ ', color: category.accent, dim: !selected },
+          { text: selected ? '> ' : '  ', color: 'green', bold: true },
+          {
+            text: action.key.padEnd(4),
+            bold: true,
+            color: action.disabled ? undefined : action.danger ? 'red' : category.accent,
+            dim: action.disabled,
+          },
+          {
+            text: showDescriptions
+              ? action.label.padEnd(labelWidth).slice(0, labelWidth)
+              : action.label.slice(0, labelWidth),
+            dim: action.disabled,
+            bold: selected && !action.disabled,
+          },
+          ...(showDescriptions ? [{ text: `  ${trailing}`.slice(0, descWidth + 2), dim: true }] : []),
+        ]}
+      />
+    );
+  };
+
+  // The footer gives up detail before it gives up the position counter:
+  // knowing there is more list below matters more than the key legend.
+  const counter = rowList.length > viewport ? `↑/↓ ${index + 1}/${flat.length}` : '';
+  const separator = '  ·  ';
+  const room = Math.max(0, width - 4 - (counter ? counter.length + separator.length : 0));
+  const long = 'enter runs the selection, a shortcut key runs directly, esc closes';
+  const short = 'enter run, esc close';
+  const hint = long.length <= room ? long : short.length <= room ? short : '';
+  const footer = hint && counter ? `${hint}${separator}${counter}` : hint || counter;
 
   return (
     <Modal borderColor="cyan" width={width}>
-      {blankLine(width)}
+      {compact ? null : blankLine(width)}
       {textLine(overlay.title, width, { bold: true, color: 'cyan' })}
-      <ModalLine width={width} segments={[{ text: `  ${'─'.repeat(Math.max(0, width - 4))}`, dim: true }]} />
+      {tiny ? null : rule}
 
-      {overlay.categories.map((category, categoryIndex) => (
-        <React.Fragment key={category.id}>
-          {categoryIndex > 0 ? blankLine(width) : null}
-          <ModalLine
-            width={width}
-            segments={[
-              { text: '  ' },
-              { text: category.title, bold: true, color: category.accent },
-              ...(category.danger
-                ? [{ text: '   destructive, cannot be undone', dim: true, color: 'red' }]
-                : []),
-            ]}
-          />
-          {category.actions.map((action) => {
-            cursor += 1;
-            const selected = cursor === index;
-            return (
-              <ModalLine
-                key={`${category.id}-${action.key}-${action.label}`}
-                width={width}
-                segments={[
-                  { text: '  ' },
-                  { text: '│ ', color: category.accent, dim: !selected },
-                  { text: selected ? '> ' : '  ', color: 'green', bold: true },
-                  {
-                    text: action.key.padEnd(4),
-                    bold: true,
-                    color: action.disabled ? undefined : action.danger ? 'red' : category.accent,
-                    dim: action.disabled,
-                  },
-                  {
-                    text: action.label.padEnd(labelWidth).slice(0, labelWidth),
-                    dim: action.disabled,
-                    bold: selected && !action.disabled,
-                  },
-                  {
-                    text: (action.disabled
-                      ? (action.disabledReason ?? 'unavailable')
-                      : action.description
-                    ).slice(0, descWidth),
-                    dim: true,
-                  },
-                ]}
-              />
-            );
-          })}
-        </React.Fragment>
-      ))}
+      {rowList.slice(offset, offset + viewport).map((row, i) => renderRow(row, offset + i))}
 
-      <ModalLine width={width} segments={[{ text: `  ${'─'.repeat(Math.max(0, width - 4))}`, dim: true }]} />
-      {textLine('enter runs the selection, a shortcut key runs directly, esc closes', width, {
-        dim: true,
-      })}
-      {blankLine(width)}
+      {tiny ? null : rule}
+      {textLine(footer, width, { dim: true })}
+      {compact ? null : blankLine(width)}
     </Modal>
   );
 }

@@ -79,7 +79,7 @@ export function buildActionCategories(
       },
       {
         key: "E",
-        label: "Resume session (dangerous)",
+        label: "Resume session (yolo)",
         description: "Resume with --dangerously-skip-permissions",
         danger: true,
         run: handlers.resumeDangerous,
