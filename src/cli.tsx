@@ -10,6 +10,9 @@ import { LauncherService } from './services/LauncherService.js';
 import { WorkspaceResolver } from './services/WorkspaceResolver.js';
 import { App } from './ui/App.js';
 
+/** Window title while the TUI owns the terminal. */
+const APP_TITLE = 'Lazy Claude';
+
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
@@ -102,15 +105,29 @@ async function main() {
     return;
   }
 
-  // Switch to the alternate screen buffer for a fullscreen feel.
+  // Switch to the alternate screen buffer for a fullscreen feel, and name
+  // the window while we own it. Both are entered and undone together: a
+  // leftover title outlives the process in every terminal that does not
+  // reset it itself, which is most of them.
+  //
+  // OSC 0 sets the window title. The bracketing CSI 22/23 push and pop the
+  // terminal's own title stack, so quitting restores whatever the shell had
+  // set rather than blanking it; terminals without the stack ignore both.
   process.stdout.write('\u001B[?1049h');
+  process.stdout.write('\u001B[22;0t');
+  process.stdout.write(`\u001B]0;${APP_TITLE}\u0007`);
+  // Windows consoles take their title from the process rather than from an
+  // escape sequence. Elsewhere it is harmless and shows up in ps.
+  process.title = APP_TITLE;
+
   let restored = false;
-  const restoreScreen = () => {
+  const restoreTerminal = () => {
     if (restored) return;
     restored = true;
+    process.stdout.write('\u001B[23;0t');
     process.stdout.write('\u001B[?1049l');
   };
-  process.on('exit', restoreScreen);
+  process.on('exit', restoreTerminal);
 
   const { waitUntilExit } = render(<App initialProject={initialProject} />, { exitOnCtrlC: true });
   await waitUntilExit();
@@ -120,7 +137,7 @@ async function main() {
   // inherits a clean terminal and Lazy Claude is fully out of the way.
   const plan = LauncherService.takePending();
   if (plan) {
-    restoreScreen();
+    restoreTerminal();
     console.log(`${plan.shell}\n`);
     const result = spawnSync(plan.command, plan.args, {
       stdio: 'inherit',
