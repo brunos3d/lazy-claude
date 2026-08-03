@@ -2585,8 +2585,15 @@ And change the sentence below it from "There is no test runner, linter, or forma
 ```
 There is no linter or formatter configured. Tests use Node's built-in
 runner with no dependencies: sources and `*.test.ts` files sit side by side
-under `src/`, and `npm test` compiles then runs `node --test dist`. Run it
-after changes; `tsc` under `strict` is still the type check.
+under `src/`, and `npm test` compiles then runs
+`node --test 'dist/**/*.test.js'`. Run it after changes; `tsc` under
+`strict` is still the type check.
+
+The quoted glob is deliberate. Node 22 stopped recursively scanning a bare
+directory passed to `--test`, so `node --test dist` now fails, and Node
+resolves the quoted pattern itself rather than the shell. Running the tests
+therefore needs Node 21 or newer, while the published CLI still supports
+the Node 18 floor in `engines`.
 
 Tests cover the pure layers only: ranking, the search engine, the workspace
 indexer, providers, jump planning, and overlay windowing. Ink components
