@@ -23,7 +23,6 @@ export const ConversationProvider: SearchProvider = {
   id: 'conversations',
   kind: 'message',
   title: 'Messages',
-  limit: 10,
 
   enabled: () => false,
 

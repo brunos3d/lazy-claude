@@ -14,7 +14,6 @@ export const SessionProvider: SearchProvider = {
   id: 'sessions',
   kind: 'session',
   title: 'Sessions',
-  limit: 12,
 
   enabled: (context) => context.index.sessions.length > 0,
 

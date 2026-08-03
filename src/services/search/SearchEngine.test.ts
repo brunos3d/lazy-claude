@@ -29,7 +29,6 @@ function provider(options: {
   id: string;
   kind: ResultKind;
   hits: number;
-  limit?: number;
   enabled?: boolean;
   throws?: boolean;
   gate?: Promise<void>;
@@ -38,7 +37,6 @@ function provider(options: {
     id: options.id,
     kind: options.kind,
     title: options.id,
-    limit: options.limit ?? 10,
     enabled: () => options.enabled ?? true,
     async search() {
       if (options.gate) await options.gate;
@@ -67,13 +65,15 @@ test('drops groups with no hits', async () => {
   assert.deepEqual(groups.map((g) => g.kind), ['project']);
 });
 
-test('caps hits at the provider limit but reports the true total', async () => {
+test('returns every hit, so nothing is unreachable from the palette', async () => {
   SearchEngine.reset();
-  SearchEngine.register(provider({ id: 'sessions', kind: 'session', hits: 40, limit: 12 }));
+  SearchEngine.register(provider({ id: 'sessions', kind: 'session', hits: 400 }));
 
   const [group] = await SearchEngine.search('x', index);
-  assert.equal(group.hits.length, 12);
-  assert.equal(group.total, 40);
+  assert.equal(group.hits.length, 400);
+  // The last hit must survive: the palette scrolls the whole group in its
+  // own tab, so a ceiling here would silently hide results.
+  assert.equal(group.hits.at(-1)?.id, 'session:399');
 });
 
 test('skips providers that report themselves disabled', async () => {
@@ -101,7 +101,6 @@ test('an empty query returns no groups without running providers', async () => {
     id: 'projects',
     kind: 'project',
     title: 'Projects',
-    limit: 6,
     enabled: () => true,
     async search() {
       ran = true;
@@ -135,5 +134,5 @@ test('registering the same id twice replaces the provider', async () => {
   SearchEngine.register(provider({ id: 'projects', kind: 'project', hits: 3 }));
 
   const [group] = await SearchEngine.search('x', index);
-  assert.equal(group.total, 3);
+  assert.equal(group.hits.length, 3);
 });

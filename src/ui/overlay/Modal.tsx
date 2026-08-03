@@ -20,6 +20,13 @@ export interface Segment {
   bold?: boolean;
   dim?: boolean;
   inverse?: boolean;
+  /**
+   * Overrides the row background for this segment only. Used for the
+   * palette's active tab, which is a filled chip inside an otherwise
+   * ordinary row. Omit it and the segment inherits ROW_BACKGROUND, which
+   * is what keeps the row opaque.
+   */
+  backgroundColor?: string;
 }
 
 /**
@@ -51,6 +58,7 @@ export function ModalLine({ segments, width }: { segments: Segment[]; width: num
         <Text
           key={index}
           color={segment.color}
+          backgroundColor={segment.backgroundColor}
           bold={segment.bold}
           dimColor={segment.dim}
           inverse={segment.inverse}

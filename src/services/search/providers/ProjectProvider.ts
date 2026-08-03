@@ -13,7 +13,6 @@ export const ProjectProvider: SearchProvider = {
   id: 'projects',
   kind: 'project',
   title: 'Projects',
-  limit: 6,
 
   enabled: (context) => context.index.projects.length > 0,
 

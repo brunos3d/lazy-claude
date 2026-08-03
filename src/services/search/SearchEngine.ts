@@ -22,6 +22,10 @@ const GROUP_ORDER: ResultKind[] = ['project', 'session', 'message'];
  * The engine owns the request lifecycle: it builds the SearchContext, owns
  * the AbortController, and aborts the previous run when a new query
  * arrives. Providers never construct either.
+ *
+ * Groups with no hits are dropped, which is also how a disabled provider
+ * stays invisible: the palette derives its tabs from what comes back, so
+ * an empty category never gets a tab the user can land on.
  */
 class SearchEngineImpl {
   private providers: SearchProvider[] = [];
@@ -64,15 +68,13 @@ class SearchEngineImpl {
 
     if (controller.signal.aborted) return [];
 
+    // Every hit is kept. The palette scrolls one group at a time in its own
+    // tab, so there is nothing to cap: a ceiling here would only make the
+    // results past it unreachable.
     const groups: SearchGroup[] = [];
     for (const { provider, hits } of settled) {
       if (hits.length === 0) continue;
-      groups.push({
-        kind: provider.kind,
-        title: provider.title,
-        hits: hits.slice(0, provider.limit),
-        total: hits.length,
-      });
+      groups.push({ kind: provider.kind, title: provider.title, hits });
     }
 
     groups.sort((a, b) => GROUP_ORDER.indexOf(a.kind) - GROUP_ORDER.indexOf(b.kind));

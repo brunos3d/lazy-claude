@@ -49,14 +49,20 @@ export interface SearchHit {
   payload?: unknown;
 }
 
+/**
+ * All of one provider's results.
+ *
+ * Nothing is capped. The palette gives each group its own scrollable tab,
+ * so `hits.length` is both the count shown on the tab and the number the
+ * user can actually reach. An earlier design capped each group and showed
+ * a "+N more" line, which made the hidden results unreachable: navigation
+ * ran past the cap into the next group instead of into the remainder.
+ */
 export interface SearchGroup {
   kind: ResultKind;
-  /** Header text, for example "Projects". */
+  /** Tab label, for example "Projects". */
   title: string;
-  /** Already capped to the provider's limit. */
   hits: SearchHit[];
-  /** Hit count before the cap, for the "+N more" line. */
-  total: number;
 }
 
 /** One in-memory snapshot of the workspace. Queries never touch disk. */
@@ -95,10 +101,8 @@ export interface SearchContext {
 export interface SearchProvider {
   id: string;
   kind: ResultKind;
-  /** Group header text. */
+  /** Tab label. */
   title: string;
-  /** Maximum hits shown in the palette. */
-  limit: number;
   enabled(context: SearchContext): boolean;
   search(query: string, context: SearchContext): Promise<SearchHit[]>;
 }
