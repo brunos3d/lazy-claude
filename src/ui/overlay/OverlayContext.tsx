@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { useInput } from 'ink';
-import type { Action } from './dialogs.js';
+import type { ActionCategory } from '../actions/registry.js';
 
 /**
  * Overlay stack.
@@ -45,7 +45,7 @@ export interface OutputSpec {
 export interface ActionsSpec {
   kind: 'actions';
   title: string;
-  actions: Action[];
+  categories: ActionCategory[];
 }
 
 export type OverlaySpec = ConfirmSpec | InputSpec | PickerSpec | OutputSpec | ActionsSpec;

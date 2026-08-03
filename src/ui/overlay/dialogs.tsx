@@ -9,18 +9,9 @@ import {
   type PickerSpec,
 } from './OverlayContext.js';
 import { useTerminalSize } from '../useTerminalSize.js';
+import { findShortcut, flattenActions } from '../actions/registry.js';
 
-export interface Action {
-  /** Single-key shortcut that also works outside the menu. */
-  key: string;
-  label: string;
-  description: string;
-  run: () => void;
-  /** Disabled actions stay listed so the menu doubles as documentation. */
-  disabled?: boolean;
-  disabledReason?: string;
-  danger?: boolean;
-}
+export type { ActionDefinition as Action } from '../actions/registry.js';
 
 /** Confirmation with an explicit y/n gate. */
 export function ConfirmDialog({ overlay, onClose }: { overlay: ConfirmSpec & { id: number }; onClose: () => void }) {
@@ -210,10 +201,18 @@ export function OutputDialog({ overlay, onClose }: { overlay: OutputSpec & { id:
   );
 }
 
-/** Contextual action palette. */
+/**
+ * Categorized command palette.
+ *
+ * Sections carry their own colour and a guide rail, so scanning happens by
+ * group rather than by reading every row. Only actions are selectable;
+ * headers and rules are skipped by the cursor.
+ */
 export function ActionMenu({ overlay, onClose }: { overlay: ActionsSpec & { id: number }; onClose: () => void }) {
-  const width = useModalWidth(78);
+  const width = useModalWidth(84);
   const [index, setIndex] = useState(0);
+
+  const flat = flattenActions(overlay.categories);
 
   useOverlayInput(overlay.id, (input, key) => {
     if (key.escape || input === 'q') {
@@ -225,18 +224,18 @@ export function ActionMenu({ overlay, onClose }: { overlay: ActionsSpec & { id: 
       return;
     }
     if (key.downArrow || input === 'j') {
-      setIndex((i) => Math.min(overlay.actions.length - 1, i + 1));
+      setIndex((i) => Math.min(flat.length - 1, i + 1));
       return;
     }
     if (key.return) {
-      const action = overlay.actions[index];
+      const action = flat[index];
       if (action && !action.disabled) {
         onClose();
         action.run();
       }
       return;
     }
-    const direct = overlay.actions.find((a) => a.key === input && !a.disabled);
+    const direct = findShortcut(overlay.categories, input);
     if (direct) {
       onClose();
       direct.run();
@@ -244,41 +243,70 @@ export function ActionMenu({ overlay, onClose }: { overlay: ActionsSpec & { id: 
   });
 
   const labelWidth = 22;
-  const descWidth = Math.max(10, width - labelWidth - 12);
+  const descWidth = Math.max(10, width - labelWidth - 14);
+
+  // Running index across categories, so the cursor maps to the flat list.
+  let cursor = -1;
 
   return (
     <Modal borderColor="cyan" width={width}>
       {blankLine(width)}
       {textLine(overlay.title, width, { bold: true, color: 'cyan' })}
-      {blankLine(width)}
-      {overlay.actions.map((action, i) => {
-        const selected = i === index;
-        return (
+      <ModalLine width={width} segments={[{ text: `  ${'─'.repeat(Math.max(0, width - 4))}`, dim: true }]} />
+
+      {overlay.categories.map((category, categoryIndex) => (
+        <React.Fragment key={category.id}>
+          {categoryIndex > 0 ? blankLine(width) : null}
           <ModalLine
-            key={`${action.key}-${action.label}`}
             width={width}
             segments={[
-              { text: selected ? '  > ' : '    ', color: 'green', bold: true },
-              {
-                text: action.key.padEnd(6),
-                bold: true,
-                color: action.disabled ? undefined : action.danger ? 'red' : 'cyan',
-                dim: action.disabled,
-              },
-              { text: action.label.padEnd(labelWidth).slice(0, labelWidth), dim: action.disabled },
-              {
-                text: (action.disabled ? (action.disabledReason ?? 'unavailable') : action.description).slice(
-                  0,
-                  descWidth,
-                ),
-                dim: true,
-              },
+              { text: '  ' },
+              { text: category.title, bold: true, color: category.accent },
+              ...(category.danger
+                ? [{ text: '   destructive, cannot be undone', dim: true, color: 'red' }]
+                : []),
             ]}
           />
-        );
+          {category.actions.map((action) => {
+            cursor += 1;
+            const selected = cursor === index;
+            return (
+              <ModalLine
+                key={`${category.id}-${action.key}-${action.label}`}
+                width={width}
+                segments={[
+                  { text: '  ' },
+                  { text: '│ ', color: category.accent, dim: !selected },
+                  { text: selected ? '> ' : '  ', color: 'green', bold: true },
+                  {
+                    text: action.key.padEnd(4),
+                    bold: true,
+                    color: action.disabled ? undefined : action.danger ? 'red' : category.accent,
+                    dim: action.disabled,
+                  },
+                  {
+                    text: action.label.padEnd(labelWidth).slice(0, labelWidth),
+                    dim: action.disabled,
+                    bold: selected && !action.disabled,
+                  },
+                  {
+                    text: (action.disabled
+                      ? (action.disabledReason ?? 'unavailable')
+                      : action.description
+                    ).slice(0, descWidth),
+                    dim: true,
+                  },
+                ]}
+              />
+            );
+          })}
+        </React.Fragment>
+      ))}
+
+      <ModalLine width={width} segments={[{ text: `  ${'─'.repeat(Math.max(0, width - 4))}`, dim: true }]} />
+      {textLine('enter runs the selection, a shortcut key runs directly, esc closes', width, {
+        dim: true,
       })}
-      {blankLine(width)}
-      {textLine('enter run, shortcut key runs directly, esc close', width, { dim: true })}
       {blankLine(width)}
     </Modal>
   );

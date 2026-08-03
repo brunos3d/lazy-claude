@@ -46,7 +46,13 @@ import { ProjectDetail } from './ProjectDetail.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { OverlayProvider, useAppInput, useOverlays } from './overlay/OverlayContext.js';
 import { OverlayHost } from './overlay/OverlayHost.js';
-import type { Action } from './overlay/dialogs.js';
+import { buildActionCategories, findShortcut } from './actions/registry.js';
+
+/**
+ * Actions that keep a global shortcut. These act on the highlighted item
+ * and are used constantly; everything else lives in the palette (x).
+ */
+const QUICK_KEYS = new Set(['e', 'E', 'a', 'r', 'd', 'c']);
 
 /** Which panel owns the keyboard. Tab cycles through them in this order. */
 type Focus = 'projects' | 'sessions' | 'details';
@@ -81,14 +87,13 @@ Details panel
   tab or 1..4    switch tab (overview, conversation, timeline, files)
   J / K          scroll
 
-Projects
-  m              move project and migrate every reference
-  F              repair broken references
-  D              remove project and all session data
-  p              pack into a .claudepack archive
-  i              project info
+Actions (x)
+  Every operation lives in the action palette, grouped into Session,
+  Project, Maintenance and Dangerous. It adapts to whichever panel has
+  focus, so there is no separate shortcut set for projects and sessions.
+  Inside it, enter runs the selection and a shortcut key runs directly.
 
-Sessions
+Quick shortcuts (these also work outside the palette)
   e              resume the session in Claude Code
   E              resume with --dangerously-skip-permissions (confirms first)
   a              archive session (reversible, hides it from Claude Code)
@@ -96,16 +101,6 @@ Sessions
   d              delete session permanently
   c              check session file integrity
   t              toggle live / archived sessions
-
-Global
-  U              unpack a .claudepack archive
-  B              backup manager
-  V              health check
-  P              prune orphaned session folders
-  R              rescan projects and sessions
-  M              clear the metadata cache and re-read titles
-  ?              this help
-  q              quit
 
 Titles come from the same metadata Claude Code's resume picker uses.
 Sessions whose title is dimmed had it inferred from the opening prompt.`;
@@ -772,167 +767,64 @@ function AppShell({ initialProject }: AppProps) {
 
   // ---- Contextual actions ---------------------------------------------
 
-  const actions = useMemo<Action[]>(() => {
-    const list: Action[] = [];
-
-    // Resuming is the most common thing to do after finding a session, so
-    // it leads the menu ahead of every management operation.
-    if (selectedSession) {
-      list.push(
-        {
-          key: 'e',
-          label: 'Resume session',
-          description: LAUNCH_MODES.resume.description,
-          run: () => launchSession(LAUNCH_MODES.resume),
+  /**
+   * Menu contents come from the registry, generated from whatever is
+   * selected right now, so Projects and Sessions get their own palette
+   * without separate shortcut sets.
+   */
+  const categories = useMemo(
+    () =>
+      buildActionCategories({
+        focus,
+        project: selectedProject,
+        session: selectedSession,
+        handlers: {
+          resume: () => launchSession(LAUNCH_MODES.resume),
+          resumeDangerous: () => launchSession(LAUNCH_MODES.resumeDangerous),
+          archiveSession: () => selectedSession && sessionAction('archive', selectedSession),
+          restoreSession: () => selectedSession && sessionAction('restore', selectedSession),
+          deleteSession: () => selectedSession && sessionAction('delete', selectedSession),
+          checkIntegrity: () => selectedSession && checkSession(selectedSession),
+          moveProject: () => selectedProject && startMove(selectedProject),
+          repairReferences: startRepair,
+          packProject: () => selectedProject && startPack(selectedProject),
+          projectInfo: () => selectedProject && showInfo(selectedProject),
+          removeProject: () => selectedProject && startRemove(selectedProject),
+          unpackArchive: startUnpack,
+          backupManager: startBackups,
+          healthCheck: () => {
+            setBusy(true);
+            DiagnosticsService.healthCheck()
+              .then((report) => showOverlay('Health check', report.text))
+              .finally(() => setBusy(false));
+          },
+          pruneOrphans: startPrune,
+          diagnostics: runDiagnostics,
+          rescan: refresh,
+          refreshMetadata: rescanMetadata,
         },
-        {
-          key: 'E',
-          label: '! Resume, skip perms',
-          description: 'Resume with --dangerously-skip-permissions',
-          danger: true,
-          run: () => launchSession(LAUNCH_MODES.resumeDangerous),
-        },
-      );
-    }
-
-    if (selectedProject) {
-      list.push(
-        {
-          key: 'm',
-          label: 'Move project',
-          description: 'Relocate and migrate every session reference',
-          run: () => startMove(selectedProject),
-          disabled: !selectedProject.exists,
-          disabledReason: 'project directory is missing',
-        },
-        {
-          key: 'F',
-          label: 'Repair references',
-          description: 'Relink sessions after a manual move',
-          run: startRepair,
-        },
-        {
-          key: 'p',
-          label: 'Pack project',
-          description: 'Archive project and sessions into .claudepack',
-          run: () => startPack(selectedProject),
-          disabled: !selectedProject.exists,
-          disabledReason: 'project directory is missing',
-        },
-        {
-          key: 'i',
-          label: 'Project info',
-          description: 'Sizes, session counts, history entries',
-          run: () => showInfo(selectedProject),
-        },
-        {
-          key: 'D',
-          label: 'Remove project',
-          description: 'Delete the project and all session data',
-          run: () => startRemove(selectedProject),
-          disabled: !selectedProject.exists,
-          disabledReason: 'project directory is missing',
-          danger: true,
-        },
-      );
-    }
-    if (selectedSession) {
-      list.push(
-        {
-          key: 'a',
-          label: 'Archive session',
-          description: 'Hide from Claude Code, reversible',
-          run: () => sessionAction('archive', selectedSession),
-          disabled: selectedSession.archived,
-          disabledReason: 'already archived',
-        },
-        {
-          key: 'r',
-          label: 'Restore session',
-          description: 'Move back into the projects directory',
-          run: () => sessionAction('restore', selectedSession),
-          disabled: !selectedSession.archived,
-          disabledReason: 'session is not archived',
-        },
-        {
-          key: 'c',
-          label: 'Check integrity',
-          description: 'Validate every record in the session file',
-          run: () => checkSession(selectedSession),
-        },
-        {
-          key: 'd',
-          label: 'Delete session',
-          description: 'Permanently remove the session file',
-          run: () => sessionAction('delete', selectedSession),
-          danger: true,
-        },
-      );
-    }
-    list.push(
-      {
-        key: 'U',
-        label: 'Unpack archive',
-        description: 'Restore a .claudepack to a new location',
-        run: startUnpack,
-      },
-      {
-        key: 'B',
-        label: 'Backup manager',
-        description: 'Create, restore, or delete history backups',
-        run: startBackups,
-      },
-      {
-        key: 'V',
-        label: 'Health check',
-        description: 'Find broken references and orphaned data',
-        run: () => {
-          setBusy(true);
-          DiagnosticsService.healthCheck()
-            .then((report) => showOverlay('Health check', report.text))
-            .finally(() => setBusy(false));
-        },
-      },
-      {
-        key: 'P',
-        label: 'Prune orphans',
-        description: 'Delete session folders with no project',
-        run: startPrune,
-      },
-      {
-        key: 'g',
-        label: 'Run diagnostics',
-        description: 'Environment summary and counts',
-        run: runDiagnostics,
-      },
-      { key: 'R', label: 'Rescan', description: 'Rediscover projects and sessions', run: refresh },
-      {
-        key: 'M',
-        label: 'Refresh metadata',
-        description: 'Clear the title cache and re-read sessions',
-        run: rescanMetadata,
-      },
-    );
-    return list;
-  }, [
-    selectedProject,
-    selectedSession,
-    launchSession,
-    startMove,
-    startRepair,
-    startPack,
-    startRemove,
-    showInfo,
-    sessionAction,
-    checkSession,
-    startUnpack,
-    startBackups,
-    startPrune,
-    runDiagnostics,
-    refresh,
-    rescanMetadata,
-    showOverlay,
-  ]);
+      }),
+    [
+      focus,
+      selectedProject,
+      selectedSession,
+      launchSession,
+      sessionAction,
+      checkSession,
+      startMove,
+      startRepair,
+      startPack,
+      showInfo,
+      startRemove,
+      startUnpack,
+      startBackups,
+      startPrune,
+      runDiagnostics,
+      refresh,
+      rescanMetadata,
+      showOverlay,
+    ],
+  );
 
   // ---- Keyboard --------------------------------------------------------
 
@@ -989,7 +881,7 @@ function AppShell({ initialProject }: AppProps) {
         open({
           kind: 'actions',
           title: focus === 'projects' ? 'Project actions' : 'Session actions',
-          actions,
+          categories,
         });
         return;
       }
@@ -1037,15 +929,15 @@ function AppShell({ initialProject }: AppProps) {
         return;
       }
 
-      // Service shortcuts, mirrored in the action menu. Navigation letters
-      // are excluded so hjkl keep working.
-      const navigationKeys = new Set(['k', 'j', 'l', 'h']);
-      const shortcut = actions.find(
-        (a) => a.key === input && !a.disabled && a.key.length === 1 && !navigationKeys.has(input),
-      );
-      if (shortcut) {
-        shortcut.run();
-        return;
+      // Only the frequent per-item actions keep a global shortcut. Every
+      // management operation is reached through the palette (x), which is
+      // what keeps the footer about navigation.
+      if (QUICK_KEYS.has(input)) {
+        const shortcut = findShortcut(categories, input);
+        if (shortcut) {
+          shortcut.run();
+          return;
+        }
       }
 
       if (key.escape) {
@@ -1129,16 +1021,16 @@ function AppShell({ initialProject }: AppProps) {
     : `Project: ${projectLabel}`;
   const detailInnerWidth = Math.max(10, columns - leftWidth - 4);
 
+  // The footer is about navigation. Operations are discovered in the
+  // action palette, so only the constant per-item shortcuts appear here.
   const bindings: Array<[string, string]> =
     focus === 'projects'
       ? [
           ['↑↓', 'projects'],
           ['enter', 'sessions'],
           ['tab', 'panel'],
-          ['x', 'actions'],
           ['/', 'search'],
-          ['m', 'move'],
-          ['F', 'repair'],
+          ['x', 'actions'],
           ['?', 'help'],
           ['q', 'quit'],
         ]
@@ -1147,11 +1039,9 @@ function AppShell({ initialProject }: AppProps) {
             ['↑↓', 'sessions'],
             ['e', 'resume'],
             ['enter', 'details'],
-            ['esc', 'projects'],
+            ['esc', 'back'],
+            ['/', 'search'],
             ['x', 'actions'],
-            ['a', 'archive'],
-            ['d', 'delete'],
-            ['t', showArchived ? 'live' : 'archived'],
             ['?', 'help'],
             ['q', 'quit'],
           ]

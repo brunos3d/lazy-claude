@@ -9,7 +9,7 @@ Claude Code stores one folder per project under `~/.claude/projects/`, one JSONL
 - Sessions listed by their real title, the same one Claude Code's resume picker shows, with the id, age, size, and git branch as secondary facts
 - Rich session detail: message and tool-call counts, files touched and created, token usage, duration, model, Claude Code version, plus a conversation preview, an activity timeline, and a file list
 - Hierarchical navigation in the style of LazyGit: a project list and the selected project's sessions stay visible together, while the wide panel follows focus between project summary and session details
-- Contextual action menu (`x`) listing every available operation, including the ones currently unavailable and why
+- One action palette (`x`) holding every operation, grouped into Session, Project, Maintenance and Dangerous, adapting to the focused panel and listing unavailable actions with the reason
 - Resume a session in Claude Code (`e`), or resume with permission prompts skipped (`E`), handing the terminal over from the project's own directory
 - Fuzzy search (`/`) in both panels, fzf-style: `lz` finds `lazy-claude`, `vrt` finds `vortex-platform`, with matched characters highlighted and results ranked by match quality
 - Open straight into a workspace with `lazy-claude .` or `lazy-claude <path>`
@@ -68,9 +68,11 @@ Focus moves with `tab` (Projects, Sessions, Details), `enter` to step down, and 
 
 The inspector has its own tab bar under the panel title, separated from the content by a rule. The active tab is a filled blue button, inactive tabs sit at low contrast, and each carries the number that selects it, so `1`..`4` are discoverable without opening the help. Green stays reserved for titles and status, so navigation never reads as body text.
 
-Press `x` anywhere for the action menu, which lists every operation available for the current selection. The shortcuts below also work directly.
+Press `x` anywhere for the action palette. It is the single place every operation lives, grouped into Session, Project, Maintenance and Dangerous, with the destructive group last and marked in red. The palette adapts to whichever panel has focus, so there is no separate shortcut set for projects and sessions. Inside it, `enter` runs the selection and a shortcut key runs immediately.
 
-Dialogs are overlays, not screens. The action menu, confirmations, pickers, and reports draw on top of the interface while the panels stay visible and keep their selection, so closing a dialog returns you exactly where you were. Only the top dialog receives keys; the panels underneath are inert until it closes. Dialogs stack, so a confirmation raised from a picker layers over it.
+Dialogs are overlays, not screens. The palette, confirmations, pickers, and reports draw on top of the interface while the panels stay visible and keep their selection, so closing a dialog returns you exactly where you were. Only the top dialog receives keys; the panels underneath are inert until it closes. Dialogs stack, so a confirmation raised from a picker layers over it.
+
+The footer stays about navigation. Only the frequent per-item actions keep a global shortcut; everything else is discovered in the palette.
 
 | Key              | Action                                        |
 | ---------------- | --------------------------------------------- |
@@ -81,23 +83,13 @@ Dialogs are overlays, not screens. The action menu, confirmations, pickers, and 
 | `1`..`4`         | switch inspector tab (numbers shown in the bar) |
 | `J` / `K`        | scroll the detail panel from anywhere         |
 | `/`              | fuzzy-search the focused list                 |
-| `x`              | contextual action menu                        |
-| `m`               | move project (migrates all references) |
-| `F`               | repair broken references               |
-| `D`               | remove project and all session data    |
-| `p`               | pack project into a `.claudepack`      |
-| `U`               | unpack a `.claudepack`                 |
-| `B`               | backup manager                         |
-| `i`               | project info                           |
-| `V`               | health check                           |
-| `P`               | prune orphaned session folders         |
 | `e`               | resume the session in Claude Code      |
 | `E`               | resume, skipping permission prompts    |
 | `a` / `r`         | archive / restore session              |
 | `d`               | delete session                         |
 | `c`               | check session integrity                |
 | `t`               | toggle live / archived sessions        |
-| `R` / `M`         | rescan / refresh metadata cache        |
+| `x`               | action palette (every operation)       |
 | `?` / `q`         | help / quit                            |
 
 ## CLI
