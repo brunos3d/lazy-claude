@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { useInput } from 'ink';
 import type { ActionCategory } from '../actions/registry.js';
+import type { JumpTarget } from '../../services/search/types.js';
 
 /**
  * Overlay stack.
@@ -48,7 +49,22 @@ export interface ActionsSpec {
   categories: ActionCategory[];
 }
 
-export type OverlaySpec = ConfirmSpec | InputSpec | PickerSpec | OutputSpec | ActionsSpec;
+/**
+ * The global command palette. It carries no data: the palette reads the
+ * workspace index itself, and hands back only where to go.
+ */
+export interface PaletteSpec {
+  kind: 'palette';
+  onSelect: (target: JumpTarget) => void;
+}
+
+export type OverlaySpec =
+  | ConfirmSpec
+  | InputSpec
+  | PickerSpec
+  | OutputSpec
+  | ActionsSpec
+  | PaletteSpec;
 
 export type Overlay = OverlaySpec & { id: number };
 
