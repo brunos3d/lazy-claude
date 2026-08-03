@@ -8,7 +8,7 @@ import { App } from './ui/App.js';
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
-const USAGE = `lazy-clamp ${version} — LazyGit-style TUI for Claude Code sessions
+const USAGE = `lazy-clamp ${version}: LazyGit-style TUI for Claude Code sessions
 
 Usage:
   lazy-clamp            Open the TUI (also available as lzclamp)

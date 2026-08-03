@@ -43,7 +43,7 @@ interface Overlay {
 
 type ProjectItem = { kind: 'all' } | { kind: 'project'; project: ClampProject };
 
-const HELP_TEXT = `Lazy Clamp — keybindings
+const HELP_TEXT = `Lazy Clamp keybindings
 
 Navigation
   ↑/k ↓/j        move selection
@@ -360,8 +360,8 @@ export function App() {
 
   const sessionsTitle = `${showArchived ? 'Archived sessions' : 'Sessions'}${
     selectedItem?.kind === 'project'
-      ? ` — ${shortenPath(selectedProject!.orphaned ? selectedProject!.encoded : selectedProject!.path, home)}`
-      : ' — all projects'
+      ? `: ${shortenPath(selectedProject!.orphaned ? selectedProject!.encoded : selectedProject!.path, home)}`
+      : ': all projects'
   }`;
 
   return (
