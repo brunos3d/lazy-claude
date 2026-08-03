@@ -39,21 +39,41 @@ Interface
 
 ## Installation
 
-Not yet published to npm. Once it is:
+The package is published as `lazy-claude-tui`. The commands it installs are `lazy-claude` and the short alias `lzc`.
 
 ```bash
-npm i -g lazy-claude
-lazy-claude    # aliases: lazyclaude, lzc
+npm install -g lazy-claude-tui
 ```
 
-Until then, install from source:
+```bash
+pnpm add -g lazy-claude-tui
+```
+
+```bash
+yarn global add lazy-claude-tui
+```
+
+```bash
+bun add -g lazy-claude-tui
+```
+
+Run it without installing:
+
+```bash
+npx lazy-claude-tui
+pnpm dlx lazy-claude-tui
+bunx lazy-claude-tui
+```
+
+Requires Node.js 18 or newer.
+
+From source:
 
 ```bash
 git clone https://github.com/brunos3d/lazy-claude.git
 cd lazy-claude
-npm install
-npm run build
-npm link       # exposes lazy-claude and lzc globally
+npm install       # builds via the prepare script
+npm link          # exposes lazy-claude and lzc globally
 ```
 
 ## TUI

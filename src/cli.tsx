@@ -19,7 +19,7 @@ Usage:
   lazy-claude                          Open the TUI
   lazy-claude .                        Open the TUI on the current workspace
   lazy-claude <path>                   Open the TUI on a specific project
-                                       (aliases: lazyclaude, lzc)
+                                       (short alias: lzc)
 
   lazy-claude list [--json]            List all projects
   lazy-claude sessions [archived]      List all sessions with titles

@@ -1,6 +1,6 @@
 {
   "name": "lazy-claude-tui",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "🦞 A LazyGit-style terminal UI for managing Claude Code sessions and project history.",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,6 @@
   ],
   "bin": {
     "lazy-claude": "dist/cli.js",
-    "lazyclaude": "dist/cli.js",
     "lzc": "dist/cli.js"
   },
   "files": [
