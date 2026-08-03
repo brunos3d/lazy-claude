@@ -13,10 +13,22 @@ import {
   formatTokens,
   shortenPath,
 } from '../core/format.js';
+import type { TabDef } from './TabBar.js';
 
 export type DetailTab = 'overview' | 'conversation' | 'timeline' | 'files';
 
-export const DETAIL_TABS: DetailTab[] = ['overview', 'conversation', 'timeline', 'files'];
+/**
+ * Inspector tabs. Adding one here is enough: the bar lays itself out and
+ * the number shortcuts follow the order.
+ */
+export const DETAIL_TAB_DEFS: ReadonlyArray<TabDef<DetailTab>> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'conversation', label: 'Conversation' },
+  { id: 'timeline', label: 'Timeline' },
+  { id: 'files', label: 'Files' },
+];
+
+export const DETAIL_TABS: DetailTab[] = DETAIL_TAB_DEFS.map((tab) => tab.id);
 
 interface SessionDetailProps {
   session: SessionEntry;
@@ -108,18 +120,13 @@ function overviewLines(
   home: string,
   projectPath?: string,
 ): React.ReactNode[] {
+  // The panel header already names the session, so the body starts with
+  // the facts rather than repeating the title.
   const lines: React.ReactNode[] = [];
-  const title = metadata?.title ?? session.id;
 
-  lines.push(
-    <Text bold color="cyan" wrap="truncate">
-      {title}
-    </Text>,
-  );
   if (metadata && metadata.titleSource !== 'ai-title' && metadata.titleSource !== 'id') {
     lines.push(<Text dimColor>(title inferred from the opening prompt)</Text>);
   }
-  lines.push(<Text> </Text>);
 
   lines.push(<Field label="Session" value={session.id} />);
   const currentPath = projectPath ?? metadata?.cwd;

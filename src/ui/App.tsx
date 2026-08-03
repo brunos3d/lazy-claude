@@ -35,7 +35,13 @@ import { ListView } from './ListView.js';
 import { Panel } from './Panel.js';
 import { SearchRow } from './SearchRow.js';
 import { AllSessionsRow, ProjectRow, SessionRow } from './rows.js';
-import { DETAIL_TABS, SessionDetail, type DetailTab } from './SessionDetail.js';
+import {
+  DETAIL_TAB_DEFS,
+  DETAIL_TABS,
+  SessionDetail,
+  type DetailTab,
+} from './SessionDetail.js';
+import { TabBar } from './TabBar.js';
 import { ProjectDetail } from './ProjectDetail.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { OverlayProvider, useAppInput, useOverlays } from './overlay/OverlayContext.js';
@@ -1116,9 +1122,12 @@ function AppShell({ initialProject }: AppProps) {
     ? shortenPath(selectedProject.orphaned ? selectedProject.encoded : selectedProject.path, home)
     : 'all projects';
 
+  // The inspector header is a real tab bar now, so the panel title names
+  // what is being inspected instead of doubling as navigation.
   const detailTitle = showSessionDetail
-    ? DETAIL_TABS.map((t) => (t === detailTab ? `[${t}]` : ` ${t} `)).join('')
+    ? `Session: ${metadata.get(selectedSession!.file)?.title ?? selectedSession!.id}`
     : `Project: ${projectLabel}`;
+  const detailInnerWidth = Math.max(10, columns - leftWidth - 4);
 
   const bindings: Array<[string, string]> =
     focus === 'projects'
@@ -1271,21 +1280,28 @@ function AppShell({ initialProject }: AppProps) {
         <Box flexDirection="column" flexGrow={1}>
           <Panel title={detailTitle} focused={focus === 'details'} height={mainHeight}>
             {showSessionDetail && selectedSession ? (
-              <SessionDetail
-                session={selectedSession}
-                metadata={metadata.get(selectedSession.file)}
-                conversation={conversation}
-                loading={conversationLoading}
-                tab={detailTab}
-                home={home}
-                height={detailHeight}
-                scroll={detailScroll}
-                projectPath={
-                  selectedProject && !selectedProject.orphaned
-                    ? selectedProject.path
-                    : projectByEncoded.get(selectedSession.encoded)
-                }
-              />
+              <>
+                <TabBar
+                  tabs={DETAIL_TAB_DEFS}
+                  active={detailTab}
+                  width={detailInnerWidth}
+                />
+                <SessionDetail
+                  session={selectedSession}
+                  metadata={metadata.get(selectedSession.file)}
+                  conversation={conversation}
+                  loading={conversationLoading}
+                  tab={detailTab}
+                  home={home}
+                  height={detailHeight - 2}
+                  scroll={detailScroll}
+                  projectPath={
+                    selectedProject && !selectedProject.orphaned
+                      ? selectedProject.path
+                      : projectByEncoded.get(selectedSession.encoded)
+                  }
+                />
+              </>
             ) : (
               <ProjectDetail
                 project={selectedProject}

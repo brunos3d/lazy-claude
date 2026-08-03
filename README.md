@@ -66,6 +66,8 @@ The left column is a hierarchy: projects on top, the selected project's sessions
 
 Focus moves with `tab` (Projects, Sessions, Details), `enter` to step down, and `esc` to step back up. The focused panel has a green border and paints its selection as a solid bar; the other panels keep a `▶` marker so the current project and session stay identifiable. Destructive actions confirm with the exact planned steps.
 
+The inspector has its own tab bar under the panel title, separated from the content by a rule. The active tab is a filled blue button, inactive tabs sit at low contrast, and each carries the number that selects it, so `1`..`4` are discoverable without opening the help. Green stays reserved for titles and status, so navigation never reads as body text.
+
 Press `x` anywhere for the action menu, which lists every operation available for the current selection. The shortcuts below also work directly.
 
 Dialogs are overlays, not screens. The action menu, confirmations, pickers, and reports draw on top of the interface while the panels stay visible and keep their selection, so closing a dialog returns you exactly where you were. Only the top dialog receives keys; the panels underneath are inert until it closes. Dialogs stack, so a confirmation raised from a picker layers over it.
@@ -76,7 +78,7 @@ Dialogs are overlays, not screens. The action menu, confirmations, pickers, and 
 | `tab`            | cycle Projects, Sessions, Details             |
 | `enter`          | step down the hierarchy                       |
 | `esc`            | step back up                                  |
-| `1`..`4`         | switch detail tab                             |
+| `1`..`4`         | switch inspector tab (numbers shown in the bar) |
 | `J` / `K`        | scroll the detail panel from anywhere         |
 | `/`              | fuzzy-search the focused list                 |
 | `x`              | contextual action menu                        |
