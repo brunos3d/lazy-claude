@@ -113,6 +113,26 @@ lazy-claude session check <id>       # integrity scan
 
 Common flags: `-n/--dry-run`, `-f/--force`, `-p/--parents`, `--no-backup`, `--json`.
 
+## How this differs from `/cd` and `/add-dir`
+
+Claude Code binds a session to the absolute path it was started from. Transcripts live at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`, and that path is encoded both in the folder name and inside the file contents. Move or rename a repository and every prior session stops showing up from the new location.
+
+Two built-ins touch this area, and they solve different problems. `/cd` changes the working directory of the session you have open, keeping conversation history, model selection, and prompt cache, and reloading the new directory's `CLAUDE.md`. Since v2.1.169 it also relocates that session's storage, so the session appears in the new directory's picker; since v2.1.196 it stays out of the old directory's picker after a crash or forced exit. It is the right tool when you are mid-work and want to continue elsewhere, but its scope is exactly one session: moving N sessions means resuming each and running `/cd` N times. `/add-dir` grants the open session access to an additional directory and relocates nothing. Sessions that added the current directory this way do appear in its picker, which can resemble migration without being it.
+
+|                                | Scope                                     | Session must be open | Moves storage on disk    | N sessions per invocation | Rewrites paths inside transcripts |
+| ------------------------------ | ----------------------------------------- | -------------------- | ------------------------ | ------------------------- | --------------------------------- |
+| `/cd`                          | the one open session                      | Yes                  | Yes, from v2.1.169       | No, one at a time         | Internal to Claude Code           |
+| `/add-dir`                     | the one open session                      | Yes                  | No                       | No                        | No                                |
+| `lazy-claude move`             | a project and every session bound to it   | No                   | Yes, project and folders | Yes                       | No                                |
+| `lazy-claude repair`           | same, when the directory already moved    | No                   | Yes, session folders     | Yes                       | No                                |
+| `lazy-claude pack` / `unpack`  | one project, archived and restored        | No                   | Yes                      | Yes                       | Yes, on unpack                    |
+
+`lazy-claude move` operates on a project rather than a session. It moves the directory, renames the session folder for every session bound to it, migrates the folders of nested sub-projects and worktrees, updates `history.jsonl`, and keeps archived sessions in sync. Nothing has to be resumed. `lazy-claude repair` performs the same relocation when the directory was already moved with `mv`. Both accept `-n/--dry-run` to print the plan first, and both run as journaled operations that undo completed steps if a later one fails.
+
+Use `/cd` for a single live session you are working in right now. Use Lazy Claude when relocating a repository together with its full history, or repairing one that already moved. There is no built-in bulk equivalent; the open request is [anthropics/claude-code#27473](https://github.com/anthropics/claude-code/issues/27473).
+
+One caveat worth stating plainly: this depends on an on-disk layout that is internal to Claude Code and changes between versions. `move`, `repair`, `remove`, and `unpack` back up `history.jsonl` first (unless `--no-backup`), but that backup does not include transcripts. For a full snapshot before a large change, run `lazy-claude pack`. See the [sessions documentation](https://code.claude.com/docs/en/sessions).
+
 ## Session titles and metadata
 
 Claude Code writes an `ai-title` record into each session file, which is what the resume picker displays. It sits near the end of a multi-megabyte file, so Lazy Claude reads a chunk from each end of the file rather than parsing all of it, and caches the result keyed by file size and mtime. A first scan of ~800 sessions takes about a quarter of a second; later launches are instant.
