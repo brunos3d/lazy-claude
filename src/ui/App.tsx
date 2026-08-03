@@ -47,19 +47,13 @@ import { useTerminalSize } from './useTerminalSize.js';
 import { OverlayProvider, useAppInput, useOverlays } from './overlay/OverlayContext.js';
 import { OverlayHost } from './overlay/OverlayHost.js';
 import { buildActionCategories, findShortcut } from './actions/registry.js';
+import { FOCUS_ORDER, type Focus, type ProjectItem } from './types.js';
 
 /**
  * Actions that keep a global shortcut. These act on the highlighted item
  * and are used constantly; everything else lives in the palette (x).
  */
 const QUICK_KEYS = new Set(['e', 'E', 'a', 'r', 'd', 'c']);
-
-/** Which panel owns the keyboard. Tab cycles through them in this order. */
-type Focus = 'projects' | 'sessions' | 'details';
-
-const FOCUS_ORDER: Focus[] = ['projects', 'sessions', 'details'];
-
-type ProjectItem = { kind: 'all' } | { kind: 'project'; project: Project };
 
 export interface AppProps {
   /** Project to open directly, from `lazy-claude <path>`. */
