@@ -8,7 +8,7 @@ Claude Code stores one folder per project under `~/.claude/projects/`, one JSONL
 
 - Sessions listed by their real title, the same one Claude Code's resume picker shows, with the id, age, size, and git branch as secondary facts
 - Rich session detail: message and tool-call counts, files touched and created, token usage, duration, model, Claude Code version, plus a conversation preview, an activity timeline, and a file list
-- Contextual navigation in the style of LazyGit: projects drill into sessions, and the wide panel always describes the current selection
+- Hierarchical navigation in the style of LazyGit: a project list and the selected project's sessions stay visible together, while the wide panel follows focus between project summary and session details
 - Contextual action menu (`x`) listing every available operation, including the ones currently unavailable and why
 - Search (`/`) across titles, ids, paths, and branches
 - Open straight into a workspace with `lazy-claude .` or `lazy-claude <path>`
@@ -48,18 +48,35 @@ lazy-claude .        # open the current workspace directly
 lazy-claude ~/code/app
 ```
 
-The left column is contextual: it lists projects, and drilling into one replaces it with that project's sessions. The wide right panel always describes the current selection, with tabs for a session's overview, conversation preview, timeline, and file activity. Destructive actions confirm with the exact planned steps.
+The left column is a hierarchy: projects on top, the selected project's sessions below. Both stay on screen, so the workspace you are in never disappears while you browse its sessions. The wide panel on the right follows focus, showing the project summary while Projects has focus and the session details once Sessions or Details does, with tabs for overview, conversation preview, timeline, and file activity.
+
+```
+┌──────────────────────────────┐┌────────────────────────┐
+│ Projects                     ││ Project summary,       │
+│   ~/github/project-a         ││ or session details     │
+│ ▶ ~/github/lazy-claude       ││ once a session has     │
+│   ~/github/project-c         ││ focus                  │
+├──────────────────────────────┤│                        │
+│ Sessions: ~/github/lazy-claude││                       │
+│ ▶ Build Lazy Claude UI       ││                        │
+│   Fix Windows support        ││                        │
+└──────────────────────────────┘└────────────────────────┘
+```
+
+Focus moves with `tab` (Projects, Sessions, Details), `enter` to step down, and `esc` to step back up. The focused panel has a green border and paints its selection as a solid bar; the other panels keep a `▶` marker so the current project and session stay identifiable. Destructive actions confirm with the exact planned steps.
 
 Press `x` anywhere for the action menu, which lists every operation available for the current selection. The shortcuts below also work directly.
 
-| Key               | Action                                 |
-| ----------------- | -------------------------------------- |
-| `↑`/`k`, `↓`/`j`  | move selection                         |
-| `enter` / `esc`   | drill into sessions / back to projects |
-| `tab` or `1`..`4` | switch detail tab                      |
-| `J` / `K`         | scroll the detail panel                |
-| `/`               | search the current list                |
-| `x`               | contextual action menu                 |
+| Key              | Action                                        |
+| ---------------- | --------------------------------------------- |
+| `↑`/`k`, `↓`/`j` | move within the focused panel                 |
+| `tab`            | cycle Projects, Sessions, Details             |
+| `enter`          | step down the hierarchy                       |
+| `esc`            | step back up                                  |
+| `1`..`4`         | switch detail tab                             |
+| `J` / `K`        | scroll the detail panel from anywhere         |
+| `/`              | search the focused list                       |
+| `x`              | contextual action menu                        |
 | `m`               | move project (migrates all references) |
 | `F`               | repair broken references               |
 | `D`               | remove project and all session data    |

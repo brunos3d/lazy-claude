@@ -35,7 +35,10 @@ import { ProjectDetail } from './ProjectDetail.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { ConfirmDialog, InputDialog, OverlayView, SelectDialog, type Modal } from './modals.js';
 
-type View = 'projects' | 'sessions';
+/** Which panel owns the keyboard. Tab cycles through them in this order. */
+type Focus = 'projects' | 'sessions' | 'details';
+
+const FOCUS_ORDER: Focus[] = ['projects', 'sessions', 'details'];
 
 type ProjectItem = { kind: 'all' } | { kind: 'project'; project: Project };
 
@@ -46,17 +49,26 @@ export interface AppProps {
 
 const HELP_TEXT = `Lazy Claude
 
+Layout
+  The left column is a hierarchy: projects on top, the selected
+  project's sessions below. The project list never disappears, so the
+  current workspace stays visible while you browse its sessions. The
+  wide panel shows the project summary while Projects has focus, and
+  the session details once Sessions or Details does.
+
 Navigation
-  ↑/k ↓/j        move selection
-  enter          open project sessions / analyze session
-  esc            back to the project list
-  tab or 1..4    switch detail tab (overview, conversation, timeline, files)
-  J / K          scroll the detail panel
-  /              search the current list
+  ↑/k ↓/j        move within the focused panel
+  tab            cycle Projects, Sessions, Details
+  enter          focus the session list for the selected project
+  esc            step back up (Details to Sessions to Projects)
+  /              search the focused list
   x              contextual action menu
 
+Details panel
+  tab or 1..4    switch tab (overview, conversation, timeline, files)
+  J / K          scroll
+
 Projects
-  enter          browse sessions
   m              move project and migrate every reference
   F              repair broken references
   D              remove project and all session data
@@ -75,7 +87,8 @@ Global
   B              backup manager
   V              health check
   P              prune orphaned session folders
-  R              refresh (rescan projects and sessions)
+  R              rescan projects and sessions
+  M              clear the metadata cache and re-read titles
   ?              this help
   q              quit
 
@@ -97,9 +110,8 @@ export function App({ initialProject }: AppProps) {
 
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [view, setView] = useState<View>('projects');
+  const [focus, setFocus] = useState<Focus>('projects');
   const [projectIndex, setProjectIndex] = useState(0);
-  const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [sessionIndex, setSessionIndex] = useState(0);
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -109,8 +121,10 @@ export function App({ initialProject }: AppProps) {
   const [conversationLoading, setConversationLoading] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>('overview');
   const [detailScroll, setDetailScroll] = useState(0);
-  const [query, setQuery] = useState('');
-  const [searchActive, setSearchActive] = useState(false);
+  // One query per list, so switching focus never silently re-filters the other.
+  const [projectQuery, setProjectQuery] = useState('');
+  const [sessionQuery, setSessionQuery] = useState('');
+  const [searching, setSearching] = useState(false);
   const [modals, setModals] = useState<Modal[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [status, setStatus] = useState<string | undefined>();
@@ -126,7 +140,6 @@ export function App({ initialProject }: AppProps) {
     [],
   );
 
-  // Discover projects.
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
@@ -151,27 +164,28 @@ export function App({ initialProject }: AppProps) {
   }, [projects]);
 
   const projectItems = useMemo<ProjectItem[]>(() => {
-    if (view !== 'projects' || !query.trim()) return allProjectItems;
+    if (!projectQuery.trim()) return allProjectItems;
     return allProjectItems.filter(
-      (item) => item.kind === 'all' || SearchService.matchesProject(item.project, query),
+      (item) => item.kind === 'all' || SearchService.matchesProject(item.project, projectQuery),
     );
-  }, [allProjectItems, query, view]);
+  }, [allProjectItems, projectQuery]);
 
   // Open straight into a project when launched with a path.
   useEffect(() => {
     if (autoOpened || !initialProject || !projects) return;
     setAutoOpened(true);
-    const match = projects.find((p) => p.path === initialProject);
-    if (!match) return;
-    setActiveProject(match);
-    setView('sessions');
     const index = allProjectItems.findIndex(
-      (item) => item.kind === 'project' && item.project.path === match.path,
+      (item) => item.kind === 'project' && item.project.path === initialProject,
     );
-    if (index >= 0) setProjectIndex(index);
+    if (index < 0) return;
+    setProjectIndex(index);
+    setFocus('sessions');
   }, [autoOpened, initialProject, projects, allProjectItems]);
 
-  /** Encoded folder to current project path, for sessions shown out of context. */
+  const selectedItem = projectItems[Math.min(projectIndex, projectItems.length - 1)] ?? null;
+  const selectedProject = selectedItem?.kind === 'project' ? selectedItem.project : null;
+
+  /** Encoded folder to current project path, for the all-sessions view. */
   const projectByEncoded = useMemo(() => {
     const map = new Map<string, string>();
     for (const project of projects ?? []) {
@@ -180,32 +194,19 @@ export function App({ initialProject }: AppProps) {
     return map;
   }, [projects]);
 
-  const highlightedItem = projectItems[Math.min(projectIndex, projectItems.length - 1)] ?? null;
-  const highlightedProject = highlightedItem?.kind === 'project' ? highlightedItem.project : null;
-
-  /** The project whose sessions the right side is about. */
-  const scopeProject = view === 'sessions' ? activeProject : highlightedProject;
-
-  // Load sessions for the current scope.
+  // Sessions always belong to the highlighted project, whichever panel has
+  // focus. That is what keeps the hierarchy stable.
   useEffect(() => {
     let cancelled = false;
     setSessionsLoading(true);
     const load = async () => {
-      if (view === 'sessions') {
-        if (!activeProject) {
-          return showArchived ? listAllArchivedSessions() : listAllSessions();
-        }
-        return showArchived
-          ? listArchivedSessions(activeProject.encoded)
-          : listSessions(activeProject.encoded);
-      }
-      // Projects view: preview the highlighted project's sessions.
-      if (!highlightedProject) {
+      if (!selectedItem) return [];
+      if (selectedItem.kind === 'all') {
         return showArchived ? listAllArchivedSessions() : listAllSessions();
       }
       return showArchived
-        ? listArchivedSessions(highlightedProject.encoded)
-        : listSessions(highlightedProject.encoded);
+        ? listArchivedSessions(selectedItem.project.encoded)
+        : listSessions(selectedItem.project.encoded);
     };
     load()
       .then(async (list) => {
@@ -225,28 +226,31 @@ export function App({ initialProject }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [view, activeProject, highlightedProject, showArchived, refreshTick]);
+  }, [selectedItem, showArchived, refreshTick]);
 
   const visibleSessions = useMemo(() => {
-    if (view !== 'sessions' || !query.trim()) return sessions;
+    if (!sessionQuery.trim()) return sessions;
     return SearchService.filterSessions(
       sessions,
       metadata,
-      activeProject?.path ?? '',
-      query,
+      selectedProject?.path ?? '',
+      sessionQuery,
     );
-  }, [sessions, metadata, query, view, activeProject]);
+  }, [sessions, metadata, sessionQuery, selectedProject]);
 
   const selectedSession =
-    view === 'sessions' && visibleSessions.length > 0
+    visibleSessions.length > 0
       ? visibleSessions[Math.min(sessionIndex, visibleSessions.length - 1)]
       : null;
 
-  // Deep-analyze the selected session for the detail panel.
+  /** The centre panel follows focus: project summary, or session details. */
+  const showSessionDetail = focus !== 'projects' && selectedSession !== null;
+
+  // Analyze only what the centre panel is actually showing.
   useEffect(() => {
     setConversation(null);
     setDetailScroll(0);
-    if (!selectedSession) return;
+    if (!selectedSession || !showSessionDetail) return;
     let cancelled = false;
     setConversationLoading(true);
     ConversationService.analyze(selectedSession)
@@ -262,7 +266,7 @@ export function App({ initialProject }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [selectedSession?.file]);
+  }, [selectedSession?.file, showSessionDetail]);
 
   const runOp = useCallback(
     (title: string, fn: () => Promise<string[]>) => {
@@ -475,9 +479,8 @@ export function App({ initialProject }: AppProps) {
       showOverlay('Repair', 'No broken references found. Everything looks good.');
       return;
     }
-    const target = highlightedProject ?? activeProject;
-    if (target && !target.exists && !target.orphaned) {
-      chooseRepairTarget(target.path);
+    if (selectedProject && !selectedProject.exists && !selectedProject.orphaned) {
+      chooseRepairTarget(selectedProject.path);
       return;
     }
     push({
@@ -490,7 +493,7 @@ export function App({ initialProject }: AppProps) {
         chooseRepairTarget(value);
       },
     });
-  }, [projects, highlightedProject, activeProject, chooseRepairTarget, pop, push, showOverlay]);
+  }, [projects, selectedProject, chooseRepairTarget, pop, push, showOverlay]);
 
   const startBackups = useCallback(() => {
     setBusy(true);
@@ -602,20 +605,21 @@ export function App({ initialProject }: AppProps) {
 
   const sessionAction = useCallback(
     (kind: 'archive' | 'restore' | 'delete', session: SessionEntry) => {
+      const label = metadata.get(session.file)?.title ?? session.id;
       const spec = {
         archive: {
           title: 'Archive session',
-          message: `Archive "${metadata.get(session.file)?.title ?? session.id}"?\n\nIt moves to the Lazy Claude archive and disappears from Claude Code until restored.`,
+          message: `Archive "${label}"?\n\nIt moves to the Lazy Claude archive and disappears from Claude Code until restored.`,
           danger: false,
         },
         restore: {
           title: 'Restore session',
-          message: `Restore "${metadata.get(session.file)?.title ?? session.id}" back into the Claude projects directory?`,
+          message: `Restore "${label}" back into the Claude projects directory?`,
           danger: false,
         },
         delete: {
           title: 'Delete session',
-          message: `Permanently delete "${metadata.get(session.file)?.title ?? session.id}"?\n\nThis removes the session file and cannot be undone.`,
+          message: `Permanently delete "${label}"?\n\nThis removes the session file and cannot be undone.`,
           danger: true,
         },
       }[kind];
@@ -687,14 +691,6 @@ export function App({ initialProject }: AppProps) {
       });
   }, [pop, push, runOp, showOverlay]);
 
-  const openProject = useCallback((item: ProjectItem) => {
-    setActiveProject(item.kind === 'all' ? null : item.project);
-    setView('sessions');
-    setSessionIndex(0);
-    setQuery('');
-    setSearchActive(false);
-  }, []);
-
   const runDiagnostics = useCallback(() => {
     setBusy(true);
     DiagnosticsService.doctor()
@@ -716,24 +712,14 @@ export function App({ initialProject }: AppProps) {
 
   const actions = useMemo<Action[]>(() => {
     const list: Action[] = [];
-    const project = scopeProject;
-
-    if (view === 'projects') {
-      list.push({
-        key: 'enter',
-        label: 'Browse sessions',
-        description: 'Open the session list for this project',
-        run: () => highlightedItem && openProject(highlightedItem),
-      });
-    }
-    if (project) {
+    if (selectedProject) {
       list.push(
         {
           key: 'm',
           label: 'Move project',
           description: 'Relocate and migrate every session reference',
-          run: () => startMove(project),
-          disabled: !project.exists,
+          run: () => startMove(selectedProject),
+          disabled: !selectedProject.exists,
           disabledReason: 'project directory is missing',
         },
         {
@@ -746,28 +732,28 @@ export function App({ initialProject }: AppProps) {
           key: 'p',
           label: 'Pack project',
           description: 'Archive project and sessions into .claudepack',
-          run: () => startPack(project),
-          disabled: !project.exists,
+          run: () => startPack(selectedProject),
+          disabled: !selectedProject.exists,
           disabledReason: 'project directory is missing',
         },
         {
           key: 'i',
           label: 'Project info',
           description: 'Sizes, session counts, history entries',
-          run: () => showInfo(project),
+          run: () => showInfo(selectedProject),
         },
         {
           key: 'D',
           label: 'Remove project',
           description: 'Delete the project and all session data',
-          run: () => startRemove(project),
-          disabled: !project.exists,
+          run: () => startRemove(selectedProject),
+          disabled: !selectedProject.exists,
           disabledReason: 'project directory is missing',
           danger: true,
         },
       );
     }
-    if (view === 'sessions' && selectedSession) {
+    if (selectedSession) {
       list.push(
         {
           key: 'a',
@@ -836,12 +822,7 @@ export function App({ initialProject }: AppProps) {
         description: 'Environment summary and counts',
         run: runDiagnostics,
       },
-      {
-        key: 'R',
-        label: 'Rescan',
-        description: 'Rediscover projects and sessions',
-        run: refresh,
-      },
+      { key: 'R', label: 'Rescan', description: 'Rediscover projects and sessions', run: refresh },
       {
         key: 'M',
         label: 'Refresh metadata',
@@ -851,11 +832,8 @@ export function App({ initialProject }: AppProps) {
     );
     return list;
   }, [
-    view,
-    scopeProject,
-    highlightedItem,
+    selectedProject,
     selectedSession,
-    openProject,
     startMove,
     startRepair,
     startPack,
@@ -879,18 +857,19 @@ export function App({ initialProject }: AppProps) {
   useInput(
     (input, key) => {
       // Search capture takes priority while typing.
-      if (searchActive) {
+      if (searching) {
+        const setQuery = focus === 'projects' ? setProjectQuery : setSessionQuery;
         if (key.escape) {
           setQuery('');
-          setSearchActive(false);
+          setSearching(false);
         } else if (key.return) {
-          setSearchActive(false);
+          setSearching(false);
         } else if (key.backspace || key.delete) {
           setQuery((q) => q.slice(0, -1));
         } else if (input && !key.ctrl && !key.meta) {
           setQuery((q) => q + input);
-          setProjectIndex(0);
-          setSessionIndex(0);
+          if (focus === 'projects') setProjectIndex(0);
+          else setSessionIndex(0);
         }
         return;
       }
@@ -908,7 +887,7 @@ export function App({ initialProject }: AppProps) {
         return;
       }
       if (input === '/') {
-        setSearchActive(true);
+        setSearching(true);
         return;
       }
       if (input === 'R') {
@@ -922,10 +901,19 @@ export function App({ initialProject }: AppProps) {
         return;
       }
 
-      // Detail tab switching and scrolling.
-      if (key.tab) {
-        setDetailTab((t) => DETAIL_TABS[(DETAIL_TABS.indexOf(t) + 1) % DETAIL_TABS.length]);
-        setDetailScroll(0);
+      // Tab cycles panels. In the details panel it also switches tabs, so
+      // shift+tab is reserved for stepping the panel focus backwards.
+      if (key.tab && !key.shift) {
+        if (focus === 'details') {
+          setDetailTab((t) => DETAIL_TABS[(DETAIL_TABS.indexOf(t) + 1) % DETAIL_TABS.length]);
+          setDetailScroll(0);
+        } else {
+          setFocus(FOCUS_ORDER[(FOCUS_ORDER.indexOf(focus) + 1) % FOCUS_ORDER.length]);
+        }
+        return;
+      }
+      if (key.tab && key.shift) {
+        setFocus(FOCUS_ORDER[(FOCUS_ORDER.indexOf(focus) + FOCUS_ORDER.length - 1) % FOCUS_ORDER.length]);
         return;
       }
       if (/^[1-4]$/.test(input)) {
@@ -942,36 +930,53 @@ export function App({ initialProject }: AppProps) {
         return;
       }
 
-      // Global service shortcuts, mirrored in the action menu.
-      const shortcut = actions.find((a) => a.key === input && !a.disabled && a.key.length === 1);
+      // Service shortcuts, mirrored in the action menu. Navigation letters
+      // are excluded so hjkl keep working.
       const navigationKeys = new Set(['k', 'j', 'l', 'h']);
-      if (shortcut && !navigationKeys.has(input)) {
+      const shortcut = actions.find(
+        (a) => a.key === input && !a.disabled && a.key.length === 1 && !navigationKeys.has(input),
+      );
+      if (shortcut) {
         shortcut.run();
         return;
       }
 
-      if (view === 'projects') {
+      if (key.escape) {
+        // Step back up the hierarchy rather than jumping straight home.
+        setFocus((f) => (f === 'details' ? 'sessions' : 'projects'));
+        return;
+      }
+
+      if (focus === 'projects') {
         if (key.upArrow || input === 'k') {
           setProjectIndex((i) => Math.max(0, i - 1));
+          setSessionIndex(0);
         } else if (key.downArrow || input === 'j') {
           setProjectIndex((i) => Math.min(projectItems.length - 1, i + 1));
+          setSessionIndex(0);
         } else if (key.return || key.rightArrow || input === 'l') {
-          if (highlightedItem) openProject(highlightedItem);
+          setFocus('sessions');
         }
         return;
       }
 
-      // Sessions view
-      if (key.escape || key.leftArrow || input === 'h') {
-        setView('projects');
-        setQuery('');
+      if (focus === 'sessions') {
+        if (key.upArrow || input === 'k') {
+          setSessionIndex((i) => Math.max(0, i - 1));
+        } else if (key.downArrow || input === 'j') {
+          setSessionIndex((i) => Math.min(Math.max(0, visibleSessions.length - 1), i + 1));
+        } else if (key.leftArrow || input === 'h') {
+          setFocus('projects');
+        } else if (key.return || key.rightArrow || input === 'l') {
+          setFocus('details');
+        }
         return;
       }
-      if (key.upArrow || input === 'k') {
-        setSessionIndex((i) => Math.max(0, i - 1));
-      } else if (key.downArrow || input === 'j') {
-        setSessionIndex((i) => Math.min(Math.max(0, visibleSessions.length - 1), i + 1));
-      }
+
+      // Details panel
+      if (key.upArrow || input === 'k') setDetailScroll((s) => Math.max(0, s - 1));
+      else if (key.downArrow || input === 'j') setDetailScroll((s) => s + 1);
+      else if (key.leftArrow || input === 'h') setFocus('sessions');
     },
     { isActive: inputActive },
   );
@@ -980,47 +985,58 @@ export function App({ initialProject }: AppProps) {
 
   const mainHeight = rows - 1;
   const leftWidth = Math.min(56, Math.max(30, Math.floor(columns * 0.36)));
-  // Panel borders take 2 columns, the row's own padding takes 2 more.
-  const rowWidth = Math.max(10, leftWidth - 4);
-  const listHeight = mainHeight - 4;
+  // Panel borders take 2 columns, the row's own text starts at column 0.
+  const rowWidth = Math.max(10, leftWidth - 2);
+  // The project list keeps a little under half the column so both lists
+  // stay useful; sessions get the remainder.
+  const projectsHeight = Math.max(7, Math.floor(mainHeight * 0.45));
+  const sessionsHeight = mainHeight - projectsHeight;
+  const projectsViewport = projectsHeight - 4;
+  const sessionsViewport = sessionsHeight - 4;
   const detailHeight = mainHeight - 4;
 
-  const listTitle =
-    view === 'projects'
-      ? `Projects (${(projects ?? []).length})`
-      : `Sessions${activeProject ? `: ${shortenPath(activeProject.orphaned ? activeProject.encoded : activeProject.path, home)}` : ': all projects'}`;
+  const projectLabel = selectedProject
+    ? shortenPath(selectedProject.orphaned ? selectedProject.encoded : selectedProject.path, home)
+    : 'all projects';
 
-  const detailTitle =
-    view === 'sessions' && selectedSession
-      ? DETAIL_TABS.map((t) => (t === detailTab ? `[${t}]` : ` ${t} `)).join('')
-      : scopeProject
-        ? `Project: ${shortenPath(scopeProject.orphaned ? scopeProject.encoded : scopeProject.path, home)}`
-        : 'Overview';
+  const detailTitle = showSessionDetail
+    ? DETAIL_TABS.map((t) => (t === detailTab ? `[${t}]` : ` ${t} `)).join('')
+    : `Project: ${projectLabel}`;
 
   const bindings: Array<[string, string]> =
-    view === 'projects'
+    focus === 'projects'
       ? [
-          ['↑↓', 'navigate'],
+          ['↑↓', 'projects'],
           ['enter', 'sessions'],
+          ['tab', 'panel'],
           ['x', 'actions'],
           ['/', 'search'],
           ['m', 'move'],
           ['F', 'repair'],
-          ['V', 'health'],
           ['?', 'help'],
           ['q', 'quit'],
         ]
-      : [
-          ['↑↓', 'navigate'],
-          ['tab', 'detail tab'],
-          ['x', 'actions'],
-          ['/', 'search'],
-          ['a', 'archive'],
-          ['d', 'delete'],
-          ['t', showArchived ? 'live' : 'archived'],
-          ['esc', 'back'],
-          ['q', 'quit'],
-        ];
+      : focus === 'sessions'
+        ? [
+            ['↑↓', 'sessions'],
+            ['enter', 'details'],
+            ['esc', 'projects'],
+            ['x', 'actions'],
+            ['a', 'archive'],
+            ['d', 'delete'],
+            ['t', showArchived ? 'live' : 'archived'],
+            ['?', 'help'],
+            ['q', 'quit'],
+          ]
+        : [
+            ['↑↓', 'scroll'],
+            ['tab', 'next tab'],
+            ['1-4', 'tab'],
+            ['esc', 'sessions'],
+            ['x', 'actions'],
+            ['?', 'help'],
+            ['q', 'quit'],
+          ];
 
   const topModal = modals[modals.length - 1] ?? null;
 
@@ -1062,7 +1078,7 @@ export function App({ initialProject }: AppProps) {
           flexDirection="column"
         >
           <ActionMenu
-            title={view === 'projects' ? 'Project actions' : 'Session actions'}
+            title={focus === 'projects' ? 'Project actions' : 'Session actions'}
             actions={actions}
             active
             onClose={() => setMenuOpen(false)}
@@ -1076,15 +1092,29 @@ export function App({ initialProject }: AppProps) {
   return (
     <Box flexDirection="column" width={columns} height={rows}>
       <Box height={mainHeight}>
-        <Panel title={listTitle} focused width={leftWidth} height={mainHeight}>
-          <SearchBar
-            query={query}
-            active={searchActive}
-            matches={view === 'projects' ? projectItems.length : visibleSessions.length}
-            total={view === 'projects' ? allProjectItems.length : sessions.length}
-          />
-          {view === 'projects' ? (
-            loadError && projects === null ? (
+        {/* Left column: projects on top, that project's sessions below. */}
+        <Box flexDirection="column" width={leftWidth} flexShrink={0}>
+          <Panel
+            title={`Projects (${(projects ?? []).length})`}
+            focused={focus === 'projects'}
+            height={projectsHeight}
+          >
+            {searching && focus === 'projects' ? (
+              <SearchBar
+                query={projectQuery}
+                active
+                matches={projectItems.length}
+                total={allProjectItems.length}
+              />
+            ) : projectQuery ? (
+              <SearchBar
+                query={projectQuery}
+                active={false}
+                matches={projectItems.length}
+                total={allProjectItems.length}
+              />
+            ) : null}
+            {loadError && projects === null ? (
               <Box paddingX={1}>
                 <Text color="red" wrap="wrap">
                   {loadError}
@@ -1098,14 +1128,15 @@ export function App({ initialProject }: AppProps) {
               <ListView
                 items={projectItems}
                 selectedIndex={projectIndex}
-                height={listHeight}
-                focused
+                height={projectQuery || searching ? projectsViewport - 1 : projectsViewport}
+                focused={focus === 'projects'}
                 linesPerItem={2}
                 emptyMessage="No projects match"
                 renderItem={(item, selected) =>
                   item.kind === 'all' ? (
                     <AllSessionsRow
                       selected={selected}
+                      focused={focus === 'projects'}
                       count={(projects ?? []).reduce((sum, p) => sum + p.sessions, 0)}
                       width={rowWidth}
                     />
@@ -1113,42 +1144,65 @@ export function App({ initialProject }: AppProps) {
                     <ProjectRow
                       project={item.project}
                       selected={selected}
+                      focused={focus === 'projects'}
                       home={home}
                       width={rowWidth}
                     />
                   )
                 }
               />
-            )
-          ) : sessionsLoading ? (
-            <Box paddingX={1}>
-              <Text dimColor>Loading sessions…</Text>
-            </Box>
-          ) : (
-            <ListView
-              items={visibleSessions}
-              selectedIndex={sessionIndex}
-              height={listHeight}
-              focused
-              linesPerItem={2}
-              emptyMessage={showArchived ? 'No archived sessions' : 'No sessions'}
-              renderItem={(session, selected) => (
-                <SessionRow
-                  session={session}
-                  metadata={metadata.get(session.file)}
-                  selected={selected}
-                  showProject={activeProject === null}
-                  home={home}
-                  width={rowWidth}
-                />
-              )}
-            />
-          )}
-        </Panel>
+            )}
+          </Panel>
 
+          <Panel
+            title={`Sessions${showArchived ? ' (archived)' : ''}: ${projectLabel}`}
+            focused={focus === 'sessions'}
+            height={sessionsHeight}
+          >
+            {(searching && focus === 'sessions') || sessionQuery ? (
+              <SearchBar
+                query={sessionQuery}
+                active={searching && focus === 'sessions'}
+                matches={visibleSessions.length}
+                total={sessions.length}
+              />
+            ) : null}
+            {sessionsLoading ? (
+              <Box paddingX={1}>
+                <Text dimColor>Loading sessions…</Text>
+              </Box>
+            ) : (
+              <ListView
+                items={visibleSessions}
+                selectedIndex={sessionIndex}
+                height={
+                  (searching && focus === 'sessions') || sessionQuery
+                    ? sessionsViewport - 1
+                    : sessionsViewport
+                }
+                focused={focus === 'sessions'}
+                linesPerItem={2}
+                emptyMessage={showArchived ? 'No archived sessions' : 'No sessions'}
+                renderItem={(session, selected) => (
+                  <SessionRow
+                    session={session}
+                    metadata={metadata.get(session.file)}
+                    selected={selected}
+                    focused={focus === 'sessions'}
+                    showProject={selectedItem?.kind === 'all'}
+                    home={home}
+                    width={rowWidth}
+                  />
+                )}
+              />
+            )}
+          </Panel>
+        </Box>
+
+        {/* Centre column follows focus: project summary or session details. */}
         <Box flexDirection="column" flexGrow={1}>
-          <Panel title={detailTitle} focused={false} height={mainHeight}>
-            {view === 'sessions' && selectedSession ? (
+          <Panel title={detailTitle} focused={focus === 'details'} height={mainHeight}>
+            {showSessionDetail && selectedSession ? (
               <SessionDetail
                 session={selectedSession}
                 metadata={metadata.get(selectedSession.file)}
@@ -1159,14 +1213,14 @@ export function App({ initialProject }: AppProps) {
                 height={detailHeight}
                 scroll={detailScroll}
                 projectPath={
-                  activeProject && !activeProject.orphaned
-                    ? activeProject.path
+                  selectedProject && !selectedProject.orphaned
+                    ? selectedProject.path
                     : projectByEncoded.get(selectedSession.encoded)
                 }
               />
             ) : (
               <ProjectDetail
-                project={scopeProject}
+                project={selectedProject}
                 sessions={sessions}
                 metadata={metadata}
                 loading={sessionsLoading}
