@@ -89,6 +89,8 @@ export interface SearchHit {
   meta?: string;
   score: number;
   target: JumpTarget;
+  /** Provider-owned extra data. Opaque to the engine and the palette. */
+  payload?: unknown;
 }
 
 export interface SearchGroup {
@@ -111,6 +113,12 @@ export type JumpTarget =
 shared by `Project`, `SessionEntry`, and the archive tree. Nothing in the
 palette decodes a folder name back to a path, per the rule in `CLAUDE.md`.
 
+`SearchHit` stays generic on purpose. A provider that needs extra data puts
+it in `payload`, which the engine and the palette treat as opaque. Resist
+adding provider-specific optional fields to the shared type: the reason it
+works for three kinds of result is that it describes how a row is displayed
+and where it navigates, nothing more.
+
 ### Provider contract
 
 ```ts
@@ -124,8 +132,6 @@ export interface SearchProvider {
   kind: ResultKind;
   /** Group header text. */
   title: string;
-  /** Render order, lower first. */
-  order: number;
   /** Maximum hits shown in the palette. */
   limit: number;
   enabled(context: SearchContext): boolean;
@@ -134,6 +140,21 @@ export interface SearchProvider {
 ```
 
 Providers are stateless. They receive a context and return hits.
+
+A provider describes what it provides, not where it appears. `limit` stays
+on the provider because how many results are useful is intrinsic to the
+domain. Group ordering does not, because it is a presentation decision that
+belongs to the engine:
+
+```ts
+const GROUP_ORDER: ResultKind[] = ['project', 'session', 'message'];
+```
+
+Providers never depend on one another. Each searches only its own domain
+and returns independent results. No provider reads another's output,
+imports another provider, or assumes one has already run. This is what lets
+the engine run them in parallel and what keeps adding Files, Diagnostics,
+Notes, or Bookmarks a local change.
 
 `search` is async by contract even though project and session search
 resolve from memory. A future provider backed by SQLite, an FTS index, or
@@ -181,6 +202,12 @@ resolves inside App's existing effect. Three phases:
 The palette is usable during phase 3. Projects are already searchable and
 the footer shows `indexing 1240/3800`.
 
+Opening the palette must never trigger indexing and must never wait for it
+to finish. It searches whatever portion of the index is available at that
+moment and re-renders as more arrives. Warm-up is owned by App's discovery
+effect, not by the overlay. A palette that blocks on a cold cache is the
+failure mode this whole layer exists to avoid.
+
 `App.refresh()` calls `invalidate()`, so rescan, archive, restore, delete,
 move, and unpack all reindex.
 
@@ -199,8 +226,8 @@ batches, which is what keeps Ink responsive while the warm-up runs.
   `AbortController`, and aborts the previous run when a new query arrives.
 - Runs enabled providers in parallel with `Promise.all`.
 - Drops groups with zero hits, so empty groups never render.
-- Sorts groups by `order` and caps each to `provider.limit`, keeping the
-  true count in `SearchGroup.total`.
+- Sorts groups by `GROUP_ORDER` and caps each to `provider.limit`, keeping
+  the true count in `SearchGroup.total`.
 
 Providers never construct a context or an abort controller themselves.
 
@@ -270,11 +297,10 @@ Rows flatten to `header | hit | more | spacer`. The cursor only lands on
 `hit`; headers, `+N more` lines, and spacers are skipped. Windowing keeps a
 group's header on screen alongside its first visible hit.
 
-Group limits are `order` and `limit` on each provider: Projects `order: 0,
-limit: 6`, Sessions `order: 1, limit: 12`, Conversation `order: 2,
-limit: 10`.
+Per-provider limits: Projects 6, Sessions 12, Conversation 10.
 
-Group order is fixed: Projects, then Sessions, then Messages. The same
+Group order is fixed by `GROUP_ORDER`: Projects, then Sessions, then
+Messages. The same
 query always puts the same kind of result in the same place, which is what
 makes the palette usable from muscle memory. Each group is capped and shows
 a dim `+N more` line when truncated. Narrowing is done by typing, not by
@@ -287,6 +313,57 @@ prompt and an inverse cursor block. `Modal` currently hardcodes
 
 Keys: up and down move through hits, enter jumps, esc closes, typing
 updates results live.
+
+The palette always opens with an empty query. Nothing carries over from the
+previous open, so the first keystroke always starts a fresh search.
+
+### Recent searches
+
+`src/services/search/SearchHistory.ts` keeps the last 10 successful queries
+for the lifetime of the process. Nothing is written to disk.
+
+A query counts as successful when the user selects a result while it is
+active. Queries that were typed and abandoned are not recorded, which is
+what keeps the list free of half-typed prefixes.
+
+Recording moves an existing entry to the front rather than duplicating it,
+so the list holds 10 distinct queries ordered by most recent use.
+
+With an empty query the palette renders the history as a single group under
+a `Recent` header:
+
+```text
+  Recent
+  > Move billing project
+    Repair references
+    Agenda Zap
+    Docker
+```
+
+Selecting a recent entry sets the query to that text and searches again. It
+does not navigate anywhere. This is the one row kind whose enter behaviour
+is not a jump, so it is a distinct row type in the flattened list rather
+than a `SearchHit` with a fake target.
+
+History lives in a service, not in palette state, because the palette
+unmounts every time it closes.
+
+### Empty state
+
+When a query matches nothing, the body shows a single centered block:
+
+```text
+  No matching projects or sessions.
+
+  Press esc to close.
+```
+
+When the index is still building, the empty state adds a third line naming
+the progress, so a user who searches for a session during warm-up learns
+that more results are still coming rather than concluding it does not exist.
+
+With an empty query and no history yet, the body shows a short hint naming
+what is searchable instead of the no-match text.
 
 ### Shared windowing
 
@@ -364,6 +441,16 @@ Checks:
 - Ranking tiers: an exact project name outranks a fuzzy match on a longer
   path.
 - Empty groups are omitted, and the Messages group never appears.
+- Reopening the palette starts with an empty query, with no carry-over from
+  the previous open.
+- A query that produced a jump appears under `Recent` on the next open. A
+  query that was typed and abandoned does not. Re-running an existing entry
+  moves it to the front instead of duplicating it, and the list caps at 10.
+- Selecting a recent entry fills the input and searches without navigating.
+- The no-match empty state renders, and during warm-up it also names the
+  indexing progress.
+- Opening the palette on a cold cache returns project results immediately
+  and never blocks.
 - Jump to a session in a different project selects the right project, the
   right session, and clears both queries.
 - Jump to an archived session flips the archived toggle.
@@ -382,6 +469,7 @@ New:
 - `src/services/search/types.ts`
 - `src/services/search/SearchIndexer.ts`
 - `src/services/search/SearchEngine.ts`
+- `src/services/search/SearchHistory.ts`
 - `src/services/search/providers/ProjectProvider.ts`
 - `src/services/search/providers/SessionProvider.ts`
 - `src/services/search/providers/ConversationProvider.ts`
@@ -405,8 +493,9 @@ Modified:
 The intended path, for reference when the conversation index arrives:
 
 1. Write the provider implementing `SearchProvider`.
-2. Register it with `SearchEngine`.
-3. Add its `ResultKind` and, if it navigates somewhere new, a `JumpTarget`
-   variant plus a case in `useJumpTarget`.
+2. Register it with `SearchEngine` and add its `ResultKind` to
+   `GROUP_ORDER` at the position the group should render.
+3. If it navigates somewhere new, add a `JumpTarget` variant plus a case in
+   `useJumpTarget`.
 
 No change to `CommandPalette`, `SearchEngine`, or `SearchIndexer`.
