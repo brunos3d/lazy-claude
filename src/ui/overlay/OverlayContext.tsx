@@ -1,7 +1,8 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { useInput } from 'ink';
 import type { ActionCategory } from '../actions/registry.js';
-import type { JumpTarget } from '../../services/search/types.js';
+import type { WorkspaceAction } from '../../services/actions/types.js';
+import type { SelectTarget } from '../../services/search/types.js';
 
 /**
  * Overlay stack.
@@ -50,12 +51,19 @@ export interface ActionsSpec {
 }
 
 /**
- * The global command palette. It carries no data: the palette reads the
- * workspace index itself, and hands back only where to go.
+ * The global command palette.
+ *
+ * Projects and sessions come from the workspace index, which the palette
+ * reads itself. Actions cannot: their `active` flags and closures describe
+ * the view state at the moment the palette opened, so App builds them and
+ * passes them in, the same way ActionsSpec carries its categories.
+ *
+ * `onSelect` hands back what was chosen, never what to do about it.
  */
 export interface PaletteSpec {
   kind: 'palette';
-  onSelect: (target: JumpTarget) => void;
+  actions: WorkspaceAction[];
+  onSelect: (target: SelectTarget) => void;
 }
 
 export type OverlaySpec =

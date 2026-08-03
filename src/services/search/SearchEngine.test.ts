@@ -136,3 +136,62 @@ test('registering the same id twice replaces the provider', async () => {
   const [group] = await SearchEngine.search('x', index);
   assert.equal(group.hits.length, 3);
 });
+
+test('a browsable provider still runs on an empty query', async () => {
+  SearchEngine.reset();
+  SearchEngine.register(provider({ id: 'projects', kind: 'project', hits: 2 }));
+  SearchEngine.register({
+    ...provider({ id: 'actions', kind: 'action', hits: 3 }),
+    browsable: true,
+  });
+
+  // With no query only the browsable group comes back, which is what puts
+  // the Actions tab on screen without loading the whole workspace into one.
+  const empty = await SearchEngine.search('', index);
+  assert.deepEqual(empty.map((g) => g.kind), ['action']);
+  assert.equal(empty[0].hits.length, 3);
+
+  const typed = await SearchEngine.search('x', index);
+  assert.deepEqual(typed.map((g) => g.kind), ['project', 'action']);
+});
+
+test('a browsable provider that reports itself disabled still stays out', async () => {
+  SearchEngine.reset();
+  SearchEngine.register({
+    ...provider({ id: 'actions', kind: 'action', hits: 3, enabled: false }),
+    browsable: true,
+  });
+  assert.deepEqual(await SearchEngine.search('', index), []);
+});
+
+test('actions sort after every navigable group', async () => {
+  SearchEngine.reset();
+  SearchEngine.register(provider({ id: 'actions', kind: 'action', hits: 1 }));
+  SearchEngine.register(provider({ id: 'messages', kind: 'message', hits: 1 }));
+  SearchEngine.register(provider({ id: 'projects', kind: 'project', hits: 1 }));
+
+  const groups = await SearchEngine.search('x', index);
+  assert.deepEqual(groups.map((g) => g.kind), ['project', 'message', 'action']);
+});
+
+test('actions reach providers through the context', async () => {
+  SearchEngine.reset();
+  let seen = 0;
+  SearchEngine.register({
+    id: 'actions',
+    kind: 'action',
+    title: 'Actions',
+    browsable: true,
+    enabled: (context) => context.actions.length > 0,
+    async search(_query, context) {
+      seen = context.actions.length;
+      return [hit('action', 0)];
+    },
+  });
+
+  await SearchEngine.search('', index, [
+    { id: 'a', title: 'A', category: 'sort', run: () => {} },
+    { id: 'b', title: 'B', category: 'filter', run: () => {} },
+  ]);
+  assert.equal(seen, 2);
+});

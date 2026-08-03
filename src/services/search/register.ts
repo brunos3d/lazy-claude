@@ -1,4 +1,5 @@
 import { SearchEngine } from './SearchEngine.js';
+import { ActionProvider } from './providers/ActionProvider.js';
 import { ConversationProvider } from './providers/ConversationProvider.js';
 import { ProjectProvider } from './providers/ProjectProvider.js';
 import { SessionProvider } from './providers/SessionProvider.js';
@@ -18,4 +19,5 @@ export function registerDefaultProviders(): void {
   SearchEngine.register(ProjectProvider);
   SearchEngine.register(SessionProvider);
   SearchEngine.register(ConversationProvider);
+  SearchEngine.register(ActionProvider);
 }

@@ -1,3 +1,4 @@
+import type { WorkspaceAction } from '../actions/types.js';
 import type {
   ResultKind,
   SearchContext,
@@ -14,7 +15,7 @@ import type {
  * it here means the same query always puts the same kind of result in the
  * same place no matter what order providers registered in.
  */
-const GROUP_ORDER: ResultKind[] = ['project', 'session', 'message'];
+const GROUP_ORDER: ResultKind[] = ['project', 'session', 'message', 'action'];
 
 /**
  * Runs registered providers against one workspace snapshot.
@@ -42,16 +43,25 @@ class SearchEngineImpl {
     this.providers = [];
   }
 
-  async search(query: string, index: WorkspaceIndex): Promise<SearchGroup[]> {
+  async search(
+    query: string,
+    index: WorkspaceIndex,
+    actions: WorkspaceAction[] = [],
+  ): Promise<SearchGroup[]> {
     this.controller?.abort();
     const controller = new AbortController();
     this.controller = controller;
 
     const trimmed = query.trim();
-    if (!trimmed) return [];
+    const context: SearchContext = { index, actions, signal: controller.signal };
 
-    const context: SearchContext = { index, signal: controller.signal };
-    const active = this.providers.filter((provider) => provider.enabled(context));
+    // An empty query runs only the browsable providers, so their tab is
+    // there to be discovered before the user has guessed a word that
+    // matches. Everything else still costs nothing until something is typed.
+    const active = this.providers.filter(
+      (provider) => (trimmed !== '' || provider.browsable === true) && provider.enabled(context),
+    );
+    if (active.length === 0) return [];
 
     // A provider that throws must not take the palette down with it, and
     // must not deny the other groups their results. Independence is the

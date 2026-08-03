@@ -16,6 +16,7 @@ export function SearchRow({
   matches,
   total,
   width,
+  sort,
 }: {
   active: boolean;
   query: string;
@@ -23,9 +24,14 @@ export function SearchRow({
   matches: number;
   total: number;
   width: number;
+  /** Current sort, shown on the right so the order is never a mystery. */
+  sort?: string;
 }) {
   const filtering = query.length > 0;
   const counter = filtering ? `${matches}/${total}` : String(total);
+  // Dropped entirely on a narrow panel rather than truncated: half a sort
+  // name reads as a rendering fault, a missing one reads as no room.
+  const badge = sort && width >= 28 ? `↕ ${sort}` : '';
 
   return (
     <Box paddingX={1}>
@@ -46,6 +52,11 @@ export function SearchRow({
         </Text>
       </Text>
       <Box flexGrow={1} />
+      {badge ? (
+        <Text dimColor wrap="truncate">
+          {badge}
+        </Text>
+      ) : null}
       <Text> </Text>
     </Box>
   );

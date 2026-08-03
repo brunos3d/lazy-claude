@@ -29,6 +29,7 @@ Usage:
   lazyclaude show <session-id>        Session stats, timeline and preview
   lazyclaude search <query>           Search sessions by title, id or path
   lazyclaude info [path] [--json]     Project details (defaults to cwd)
+  lazyclaude stats [--json]           Workspace storage and counts
   lazyclaude doctor                   Environment summary
   lazyclaude verify                   Health check
 
@@ -51,7 +52,7 @@ Options:
   -f, --force      Skip confirmation prompts
   -p, --parents    Create missing parent directories
   --no-backup      Skip the automatic history.jsonl backup
-  --json           JSON output (list, sessions, info)
+  --json           JSON output (list, sessions, info, stats)
 
 Environment:
   LAZY_CLAUDE_CLAUDE_DIR  Override the Claude data directory
