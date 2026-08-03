@@ -26,7 +26,8 @@
     "lzc": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.js"
   ],
   "engines": {
     "node": ">=18"
@@ -35,6 +36,7 @@
     "build": "tsc && node scripts/chmod-bin.mjs",
     "dev": "tsc --watch",
     "start": "node dist/cli.js",
+    "test": "tsc && node --test 'dist/**/*.test.js'",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
