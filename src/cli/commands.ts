@@ -8,7 +8,7 @@ import {
 } from '../core/format.js';
 import { ConversationService } from '../services/ConversationService.js';
 import { SessionMetadataService } from '../services/SessionMetadataService.js';
-import { SearchService, toSearchDocument } from '../services/SearchService.js';
+import { SearchService } from '../services/SearchService.js';
 import { BackupService } from '../services/BackupService.js';
 import { DiagnosticsService } from '../services/DiagnosticsService.js';
 import { DiscoveryService } from '../services/DiscoveryService.js';
@@ -99,9 +99,7 @@ const commands: Record<string, Command> = {
     );
     const pathOf = (s: (typeof sessions)[number]) =>
       byEncoded.get(s.encoded) ?? metadata.get(s.file)?.cwd ?? s.encoded;
-    const matches = sessions.filter((s) =>
-      SearchService.matchesSession(toSearchDocument(s, metadata.get(s.file), pathOf(s)), query),
-    );
+    const matches = sessions.filter((s) => SearchService.matchesSession(s, metadata.get(s.file), query));
     if (flags.json) {
       console.log(
         JSON.stringify(

@@ -4,6 +4,7 @@ import type { Project } from '../services/DiscoveryService.js';
 import type { SessionEntry } from '../services/SessionService.js';
 import type { SessionMetadata } from '../services/SessionMetadataService.js';
 import { formatBytes, formatKb, formatRelativeTime, shortenPath } from '../core/format.js';
+import { fit, highlighted } from './highlight.js';
 
 /**
  * Row renderers for the two stacked navigation lists.
@@ -13,46 +14,35 @@ import { formatBytes, formatKb, formatRelativeTime, shortenPath } from '../core/
  * the next row. `width` is the usable interior of the panel.
  *
  * Selection is drawn in two strengths. The panel holding the keyboard
- * paints a solid bar; the other panels keep a visible but muted marker, so
- * the current project stays identifiable while the session list is driven.
+ * paints a solid bar; the other panels keep a visible caret, so the
+ * current project stays identifiable while the session list is driven.
  */
 
-function fit(text: string, width: number): string {
-  if (width <= 0) return '';
-  if (text.length > width) return `${text.slice(0, Math.max(0, width - 1))}…`;
-  return text.padEnd(width);
-}
-
 interface Line {
-  text: string;
+  content: React.ReactNode;
   color?: string;
   dim?: boolean;
   bold?: boolean;
 }
 
-function Row({
-  selected,
-  focused,
-  lines,
-}: {
-  selected: boolean;
-  focused: boolean;
-  lines: Line[];
-}) {
+function Row({ selected, focused, lines }: { selected: boolean; focused: boolean; lines: Line[] }) {
   const active = selected && focused;
   return (
     <Box flexDirection="column">
       {lines.map((line, i) => (
-        <Text
-          key={i}
-          backgroundColor={active ? 'blue' : undefined}
-          color={active ? 'white' : selected ? 'cyan' : line.color}
-          dimColor={!selected && line.dim}
-          bold={line.bold || selected}
-          wrap="truncate"
-        >
-          {line.text}
-        </Text>
+        // flexShrink 0: without it Yoga collapses these to zero height when
+        // the parent panel is a line short, silently hiding whole rows.
+        <Box key={i} flexShrink={0}>
+          <Text
+            backgroundColor={active ? 'blue' : undefined}
+            color={active ? 'white' : selected ? 'cyan' : line.color}
+            dimColor={!selected && line.dim}
+            bold={line.bold || selected}
+            wrap="truncate"
+          >
+            {line.content}
+          </Text>
+        </Box>
       ))}
     </Box>
   );
@@ -67,18 +57,21 @@ export function ProjectRow({
   project,
   selected,
   focused,
+  highlights,
   home,
   width,
 }: {
   project: Project;
   selected: boolean;
   focused: boolean;
+  highlights?: number[];
   home: string;
   width: number;
 }) {
   const glyph = project.orphaned ? '◌' : project.exists ? '●' : '○';
   const glyphColor = project.orphaned ? 'yellow' : project.exists ? 'green' : 'red';
   const label = project.orphaned ? project.encoded : shortenPath(project.path, home);
+  const prefix = `${marker(selected, glyph)} `;
   const meta =
     `${project.sessions} session${project.sessions === 1 ? '' : 's'} • ${formatKb(project.sessionSizeKb)}` +
     (!project.exists && !project.orphaned ? ' • missing' : '') +
@@ -89,8 +82,8 @@ export function ProjectRow({
       selected={selected}
       focused={focused}
       lines={[
-        { text: fit(`${marker(selected, glyph)} ${label}`, width), color: glyphColor, bold: true },
-        { text: fit(`      ${meta}`, width), dim: true },
+        { content: highlighted(prefix, label, highlights, width), color: glyphColor, bold: true },
+        { content: fit(`      ${meta}`, width), dim: true },
       ]}
     />
   );
@@ -112,8 +105,8 @@ export function AllSessionsRow({
       selected={selected}
       focused={focused}
       lines={[
-        { text: fit(`${marker(selected, '▣')} All sessions`, width), bold: true },
-        { text: fit(`      ${count} sessions across every project`, width), dim: true },
+        { content: fit(`${marker(selected, '▣')} All sessions`, width), bold: true },
+        { content: fit(`      ${count} sessions across every project`, width), dim: true },
       ]}
     />
   );
@@ -129,6 +122,7 @@ export function SessionRow({
   metadata,
   selected,
   focused,
+  highlights,
   showProject,
   home,
   width,
@@ -137,12 +131,14 @@ export function SessionRow({
   metadata: SessionMetadata | undefined;
   selected: boolean;
   focused: boolean;
+  highlights?: number[];
   showProject: boolean;
   home: string;
   width: number;
 }) {
   const title = metadata?.title ?? session.id;
   const inferred = metadata !== undefined && metadata.titleSource !== 'ai-title';
+  const prefix = selected ? '▶ ' : '  ';
 
   const facts: string[] = [formatRelativeTime(session.modifiedAt), formatBytes(session.sizeBytes)];
   if (metadata?.gitBranch) facts.push(metadata.gitBranch);
@@ -157,11 +153,11 @@ export function SessionRow({
       focused={focused}
       lines={[
         {
-          text: fit(`${selected ? '▶' : ' '} ${title}`, width),
+          content: highlighted(prefix, title, highlights, width),
           color: inferred ? 'gray' : 'white',
           bold: true,
         },
-        { text: fit(`   ${facts.join(' • ')}`, width), dim: true },
+        { content: fit(`   ${facts.join(' • ')}`, width), dim: true },
       ]}
     />
   );

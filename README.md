@@ -10,7 +10,7 @@ Claude Code stores one folder per project under `~/.claude/projects/`, one JSONL
 - Rich session detail: message and tool-call counts, files touched and created, token usage, duration, model, Claude Code version, plus a conversation preview, an activity timeline, and a file list
 - Hierarchical navigation in the style of LazyGit: a project list and the selected project's sessions stay visible together, while the wide panel follows focus between project summary and session details
 - Contextual action menu (`x`) listing every available operation, including the ones currently unavailable and why
-- Search (`/`) across titles, ids, paths, and branches
+- Fuzzy search (`/`) in both panels, fzf-style: `lz` finds `lazy-claude`, `vrt` finds `vortex-platform`, with matched characters highlighted and results ranked by match quality
 - Open straight into a workspace with `lazy-claude .` or `lazy-claude <path>`
 - Project discovery from `history.jsonl` plus session folder scanning, with recorded-cwd resolution for folders that have no history entry
 - Move a project: relocates the directory and migrates every reference, including nested sub-project and worktree session folders, archived sessions, and history entries, with automatic rollback on failure
@@ -75,7 +75,7 @@ Press `x` anywhere for the action menu, which lists every operation available fo
 | `esc`            | step back up                                  |
 | `1`..`4`         | switch detail tab                             |
 | `J` / `K`        | scroll the detail panel from anywhere         |
-| `/`              | search the focused list                       |
+| `/`              | fuzzy-search the focused list                 |
 | `x`              | contextual action menu                        |
 | `m`               | move project (migrates all references) |
 | `F`               | repair broken references               |
@@ -150,6 +150,16 @@ Use `/cd` for a single live session you are working in right now. Use Lazy Claud
 
 One caveat worth stating plainly: this depends on an on-disk layout that is internal to Claude Code and changes between versions. `move`, `repair`, `remove`, and `unpack` back up `history.jsonl` first (unless `--no-backup`), but that backup does not include transcripts. For a full snapshot before a large change, run `lazy-claude pack`. See the [sessions documentation](https://code.claude.com/docs/en/sessions).
 
+## Fuzzy search
+
+Press `/` to search the focused panel. Matching is fuzzy in the fzf sense: the characters you type must appear in order but not adjacently, so `lz` finds `lazy-claude` and `agn` finds `agenda-zap`. Results are ranked, rewarding consecutive runs, characters at the start of a path or word segment, and matches near the beginning of the text. Matched characters are highlighted in the list.
+
+Filtering is incremental. `esc` clears the query, a second `esc` steps back up the hierarchy, `enter` keeps the filter and hands the keyboard back to the list, and `ctrl+u` clears the query without leaving search. Each panel keeps its own query, so filtering projects does not disturb a session filter.
+
+Projects match on their path. Sessions match on title, git branch, and session id. Session matching deliberately excludes the project path: fuzzy matching against long absolute paths matches almost everything (`clm` matches `/home/user/.claude-mem/...`, which alone can own hundreds of sessions), which buries real title hits. Narrowing by project is what the Projects panel is for.
+
+Adding a new searchable attribute means appending a field in `SearchService`, which is also where an on-disk content index over prompts, summaries, and modified files would plug in.
+
 ## Session titles and metadata
 
 Claude Code writes an `ai-title` record into each session file, which is what the resume picker displays. It sits near the end of a multi-megabyte file, so Lazy Claude reads a chunk from each end of the file rather than parsing all of it, and caches the result keyed by file size and mtime. A first scan of ~800 sessions takes about a quarter of a second; later launches are instant.
@@ -191,6 +201,7 @@ src/
     commands.ts          one function per CLI command
   core/
     paths.ts             data directory resolution and path encoding
+    fuzzy.ts             fzf-style subsequence matching and scoring
     jsonl.ts             head/tail chunk readers and record streaming
     fsx.ts               move/merge/copy primitives with cross-device fallbacks
     history.ts           history.jsonl read/rewrite/remove/append
@@ -204,7 +215,8 @@ src/
     ConversationService.ts     statistics, timeline and preview parsing
     MetadataCache.ts           versioned on-disk cache, the seam for indexing
     WorkspaceResolver.ts       cwd to project, for `lazy-claude .`
-    SearchService.ts           document-based matching over sessions
+    FilterService.ts           generic ranked filtering over documents
+    SearchService.ts           what projects and sessions are searchable by
     ProjectService.ts          project info and removal
     MoveService.ts             journaled project moves
     RepairService.ts           broken reference detection and relinking

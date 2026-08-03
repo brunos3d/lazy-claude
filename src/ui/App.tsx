@@ -9,7 +9,7 @@ import { MoveService } from '../services/MoveService.js';
 import { RepairService } from '../services/RepairService.js';
 import { PackService } from '../services/PackService.js';
 import { BackupService, type Backup } from '../services/BackupService.js';
-import { SearchService } from '../services/SearchService.js';
+import { LABEL_FIELD, SearchService } from '../services/SearchService.js';
 import { SessionMetadataService, type SessionMetadata } from '../services/SessionMetadataService.js';
 import { ConversationService, type Conversation } from '../services/ConversationService.js';
 import {
@@ -27,7 +27,7 @@ import { formatBytes, formatKb, formatRelativeTime, shortenPath } from '../core/
 import { HelpBar } from './HelpBar.js';
 import { ListView } from './ListView.js';
 import { Panel } from './Panel.js';
-import { SearchBar } from './SearchBar.js';
+import { SearchRow } from './SearchRow.js';
 import { ActionMenu, type Action } from './ActionMenu.js';
 import { AllSessionsRow, ProjectRow, SessionRow } from './rows.js';
 import { DETAIL_TABS, SessionDetail, type DetailTab } from './SessionDetail.js';
@@ -163,12 +163,20 @@ export function App({ initialProject }: AppProps) {
     return items;
   }, [projects]);
 
-  const projectItems = useMemo<ProjectItem[]>(() => {
-    if (!projectQuery.trim()) return allProjectItems;
-    return allProjectItems.filter(
-      (item) => item.kind === 'all' || SearchService.matchesProject(item.project, projectQuery),
-    );
-  }, [allProjectItems, projectQuery]);
+  /**
+   * Ranked project rows. Filtering runs on every keystroke, so the result
+   * is memoized on the list and the query only. The "All sessions" entry
+   * drops out while filtering: it is a scope switch, not a search hit.
+   */
+  const projectRows = useMemo<Array<{ item: ProjectItem; highlights?: number[] }>>(() => {
+    if (!projectQuery.trim()) return allProjectItems.map((item) => ({ item }));
+    return SearchService.filterProjects(projects ?? [], projectQuery, home).map((result) => ({
+      item: { kind: 'project' as const, project: result.item },
+      highlights: result.highlights[LABEL_FIELD],
+    }));
+  }, [allProjectItems, projects, projectQuery, home]);
+
+  const projectItems = useMemo(() => projectRows.map((row) => row.item), [projectRows]);
 
   // Open straight into a project when launched with a path.
   useEffect(() => {
@@ -228,15 +236,15 @@ export function App({ initialProject }: AppProps) {
     };
   }, [selectedItem, showArchived, refreshTick]);
 
-  const visibleSessions = useMemo(() => {
-    if (!sessionQuery.trim()) return sessions;
-    return SearchService.filterSessions(
-      sessions,
-      metadata,
-      selectedProject?.path ?? '',
-      sessionQuery,
-    );
-  }, [sessions, metadata, sessionQuery, selectedProject]);
+  const sessionRows = useMemo<Array<{ item: SessionEntry; highlights?: number[] }>>(() => {
+    if (!sessionQuery.trim()) return sessions.map((item) => ({ item }));
+    return SearchService.filterSessions(sessions, metadata, sessionQuery).map((result) => ({
+      item: result.item,
+      highlights: result.highlights[LABEL_FIELD],
+    }));
+  }, [sessions, metadata, sessionQuery]);
+
+  const visibleSessions = useMemo(() => sessionRows.map((row) => row.item), [sessionRows]);
 
   const selectedSession =
     visibleSessions.length > 0
@@ -856,20 +864,40 @@ export function App({ initialProject }: AppProps) {
 
   useInput(
     (input, key) => {
-      // Search capture takes priority while typing.
+      // While typing a query the panel keeps arrow navigation, so a match
+      // can be selected without leaving search mode.
       if (searching) {
-        const setQuery = focus === 'projects' ? setProjectQuery : setSessionQuery;
+        const onProjects = focus === 'projects';
+        const setQuery = onProjects ? setProjectQuery : setSessionQuery;
+        const resetIndex = () => (onProjects ? setProjectIndex(0) : setSessionIndex(0));
+
         if (key.escape) {
           setQuery('');
           setSearching(false);
+          resetIndex();
         } else if (key.return) {
+          // Keep the filter, hand the keyboard back to the list. From the
+          // project list that also steps down into its sessions.
           setSearching(false);
+          if (onProjects) setFocus('sessions');
+        } else if (key.upArrow) {
+          if (onProjects) setProjectIndex((i) => Math.max(0, i - 1));
+          else setSessionIndex((i) => Math.max(0, i - 1));
+        } else if (key.downArrow) {
+          if (onProjects) setProjectIndex((i) => Math.min(projectItems.length - 1, i + 1));
+          else setSessionIndex((i) => Math.min(Math.max(0, visibleSessions.length - 1), i + 1));
+        } else if (key.tab) {
+          setSearching(false);
+          setFocus(FOCUS_ORDER[(FOCUS_ORDER.indexOf(focus) + 1) % FOCUS_ORDER.length]);
+        } else if (key.ctrl && (input === 'u' || input === 'w')) {
+          setQuery('');
+          resetIndex();
         } else if (key.backspace || key.delete) {
           setQuery((q) => q.slice(0, -1));
+          resetIndex();
         } else if (input && !key.ctrl && !key.meta) {
           setQuery((q) => q + input);
-          if (focus === 'projects') setProjectIndex(0);
-          else setSessionIndex(0);
+          resetIndex();
         }
         return;
       }
@@ -942,7 +970,18 @@ export function App({ initialProject }: AppProps) {
       }
 
       if (key.escape) {
-        // Step back up the hierarchy rather than jumping straight home.
+        // Clear an active filter first, then step back up the hierarchy.
+        const query = focus === 'projects' ? projectQuery : sessionQuery;
+        if (focus !== 'details' && query) {
+          if (focus === 'projects') {
+            setProjectQuery('');
+            setProjectIndex(0);
+          } else {
+            setSessionQuery('');
+            setSessionIndex(0);
+          }
+          return;
+        }
         setFocus((f) => (f === 'details' ? 'sessions' : 'projects'));
         return;
       }
@@ -989,10 +1028,15 @@ export function App({ initialProject }: AppProps) {
   const rowWidth = Math.max(10, leftWidth - 2);
   // The project list keeps a little under half the column so both lists
   // stay useful; sessions get the remainder.
-  const projectsHeight = Math.max(7, Math.floor(mainHeight * 0.45));
+  const projectsHeight = Math.max(8, Math.floor(mainHeight * 0.45));
   const sessionsHeight = mainHeight - projectsHeight;
-  const projectsViewport = projectsHeight - 4;
-  const sessionsViewport = sessionsHeight - 4;
+  // Each list panel spends 5 lines on chrome: two borders, the panel
+  // title, the always-visible search row, and the "n-m of N" counter.
+  // Overshooting here makes the panel overflow, and Yoga then collapses
+  // row lines to zero height instead of clipping.
+  const LIST_CHROME = 5;
+  const projectsViewport = Math.max(2, projectsHeight - LIST_CHROME);
+  const sessionsViewport = Math.max(2, sessionsHeight - LIST_CHROME);
   const detailHeight = mainHeight - 4;
 
   const projectLabel = selectedProject
@@ -1099,21 +1143,14 @@ export function App({ initialProject }: AppProps) {
             focused={focus === 'projects'}
             height={projectsHeight}
           >
-            {searching && focus === 'projects' ? (
-              <SearchBar
-                query={projectQuery}
-                active
-                matches={projectItems.length}
-                total={allProjectItems.length}
-              />
-            ) : projectQuery ? (
-              <SearchBar
-                query={projectQuery}
-                active={false}
-                matches={projectItems.length}
-                total={allProjectItems.length}
-              />
-            ) : null}
+            <SearchRow
+              active={searching && focus === 'projects'}
+              query={projectQuery}
+              placeholder="Search projects (/)"
+              matches={projectItems.length}
+              total={(projects ?? []).length}
+              width={rowWidth}
+            />
             {loadError && projects === null ? (
               <Box paddingX={1}>
                 <Text color="red" wrap="wrap">
@@ -1126,14 +1163,14 @@ export function App({ initialProject }: AppProps) {
               </Box>
             ) : (
               <ListView
-                items={projectItems}
+                items={projectRows}
                 selectedIndex={projectIndex}
-                height={projectQuery || searching ? projectsViewport - 1 : projectsViewport}
+                height={projectsViewport}
                 focused={focus === 'projects'}
                 linesPerItem={2}
-                emptyMessage="No projects match"
-                renderItem={(item, selected) =>
-                  item.kind === 'all' ? (
+                emptyMessage={`No projects match "${projectQuery}"`}
+                renderItem={(row, selected) =>
+                  row.item.kind === 'all' ? (
                     <AllSessionsRow
                       selected={selected}
                       focused={focus === 'projects'}
@@ -1142,9 +1179,10 @@ export function App({ initialProject }: AppProps) {
                     />
                   ) : (
                     <ProjectRow
-                      project={item.project}
+                      project={row.item.project}
                       selected={selected}
                       focused={focus === 'projects'}
+                      highlights={row.highlights}
                       home={home}
                       width={rowWidth}
                     />
@@ -1159,36 +1197,39 @@ export function App({ initialProject }: AppProps) {
             focused={focus === 'sessions'}
             height={sessionsHeight}
           >
-            {(searching && focus === 'sessions') || sessionQuery ? (
-              <SearchBar
-                query={sessionQuery}
-                active={searching && focus === 'sessions'}
-                matches={visibleSessions.length}
-                total={sessions.length}
-              />
-            ) : null}
+            <SearchRow
+              active={searching && focus === 'sessions'}
+              query={sessionQuery}
+              placeholder="Search sessions (/)"
+              matches={visibleSessions.length}
+              total={sessions.length}
+              width={rowWidth}
+            />
             {sessionsLoading ? (
               <Box paddingX={1}>
                 <Text dimColor>Loading sessions…</Text>
               </Box>
             ) : (
               <ListView
-                items={visibleSessions}
+                items={sessionRows}
                 selectedIndex={sessionIndex}
-                height={
-                  (searching && focus === 'sessions') || sessionQuery
-                    ? sessionsViewport - 1
-                    : sessionsViewport
-                }
+                height={sessionsViewport}
                 focused={focus === 'sessions'}
                 linesPerItem={2}
-                emptyMessage={showArchived ? 'No archived sessions' : 'No sessions'}
-                renderItem={(session, selected) => (
+                emptyMessage={
+                  sessionQuery
+                    ? `No sessions match "${sessionQuery}"`
+                    : showArchived
+                      ? 'No archived sessions'
+                      : 'No sessions'
+                }
+                renderItem={(row, selected) => (
                   <SessionRow
-                    session={session}
-                    metadata={metadata.get(session.file)}
+                    session={row.item}
+                    metadata={metadata.get(row.item.file)}
                     selected={selected}
                     focused={focus === 'sessions'}
+                    highlights={row.highlights}
                     showProject={selectedItem?.kind === 'all'}
                     home={home}
                     width={rowWidth}
