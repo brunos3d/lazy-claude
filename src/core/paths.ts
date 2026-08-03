@@ -27,12 +27,22 @@ export function historyFile(): string {
   return path.join(claudeDir(), 'history.jsonl');
 }
 
+/** Root for all Lazy Claude state (archive, caches). */
+export function stateDir(): string {
+  return path.join(claudeDir(), 'lazy-claude');
+}
+
 /**
  * Where archived sessions live. Kept outside `projects/` so Claude Code
  * never picks archived files up as live sessions.
  */
 export function archiveDir(): string {
-  return path.join(claudeDir(), 'lazy-claude', 'archive');
+  return path.join(stateDir(), 'archive');
+}
+
+/** Derived metadata caches and, later, search indexes. */
+export function cacheDir(): string {
+  return path.join(stateDir(), 'cache');
 }
 
 /**

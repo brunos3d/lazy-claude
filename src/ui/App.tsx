@@ -9,6 +9,9 @@ import { MoveService } from '../services/MoveService.js';
 import { RepairService } from '../services/RepairService.js';
 import { PackService } from '../services/PackService.js';
 import { BackupService, type Backup } from '../services/BackupService.js';
+import { SearchService } from '../services/SearchService.js';
+import { SessionMetadataService, type SessionMetadata } from '../services/SessionMetadataService.js';
+import { ConversationService, type Conversation } from '../services/ConversationService.js';
 import {
   archiveSession,
   deleteSession,
@@ -16,60 +19,68 @@ import {
   listAllSessions,
   listArchivedSessions,
   listSessions,
-  readSessionDetail,
   restoreSession,
   validateSession,
-  type SessionDetail,
   type SessionEntry,
 } from '../services/SessionService.js';
 import { formatBytes, formatKb, formatRelativeTime, shortenPath } from '../core/format.js';
-import { DetailPanel } from './DetailPanel.js';
 import { HelpBar } from './HelpBar.js';
 import { ListView } from './ListView.js';
 import { Panel } from './Panel.js';
+import { SearchBar } from './SearchBar.js';
+import { ActionMenu, type Action } from './ActionMenu.js';
+import { AllSessionsRow, ProjectRow, SessionRow } from './rows.js';
+import { DETAIL_TABS, SessionDetail, type DetailTab } from './SessionDetail.js';
+import { ProjectDetail } from './ProjectDetail.js';
 import { useTerminalSize } from './useTerminalSize.js';
-import {
-  ConfirmDialog,
-  InputDialog,
-  OverlayView,
-  SelectDialog,
-  type Modal,
-} from './modals.js';
+import { ConfirmDialog, InputDialog, OverlayView, SelectDialog, type Modal } from './modals.js';
 
-type Focus = 'projects' | 'sessions';
+type View = 'projects' | 'sessions';
 
 type ProjectItem = { kind: 'all' } | { kind: 'project'; project: Project };
 
-const HELP_TEXT = `Lazy Claude keybindings
+export interface AppProps {
+  /** Project to open directly, from `lazy-claude <path>`. */
+  initialProject?: string;
+}
+
+const HELP_TEXT = `Lazy Claude
 
 Navigation
   ↑/k ↓/j        move selection
-  tab ←/→ h/l    switch panel
-  enter          open sessions of the highlighted project
-  esc            back to projects panel
-
-Sessions
-  a              archive session (hides it from Claude Code, reversible)
-  r              restore an archived session
-  d / x          delete session permanently
-  c              check session file integrity
-  t              toggle live / archived view
+  enter          open project sessions / analyze session
+  esc            back to the project list
+  tab or 1..4    switch detail tab (overview, conversation, timeline, files)
+  J / K          scroll the detail panel
+  /              search the current list
+  x              contextual action menu
 
 Projects
-  m              move project (migrates all session references)
-  F              repair broken references after a manual move
+  enter          browse sessions
+  m              move project and migrate every reference
+  F              repair broken references
   D              remove project and all session data
-  p              pack project + sessions into a .claudepack archive
+  p              pack into a .claudepack archive
   i              project info
+
+Sessions
+  a              archive session (reversible, hides it from Claude Code)
+  r              restore an archived session
+  d              delete session permanently
+  c              check session file integrity
+  t              toggle live / archived sessions
 
 Global
   U              unpack a .claudepack archive
-  B              backup manager (history.jsonl)
+  B              backup manager
   V              health check
   P              prune orphaned session folders
-  R              refresh
+  R              refresh (rescan projects and sessions)
   ?              this help
-  q              quit`;
+  q              quit
+
+Titles come from the same metadata Claude Code's resume picker uses.
+Sessions whose title is dimmed had it inferred from the opening prompt.`;
 
 function expandHome(input: string): string {
   if (input === '~') return os.homedir();
@@ -79,24 +90,33 @@ function expandHome(input: string): string {
   return input;
 }
 
-export function App() {
+export function App({ initialProject }: AppProps) {
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
   const home = os.homedir();
 
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [focus, setFocus] = useState<Focus>('projects');
+  const [view, setView] = useState<View>('projects');
   const [projectIndex, setProjectIndex] = useState(0);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [sessionIndex, setSessionIndex] = useState(0);
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [metadata, setMetadata] = useState<Map<string, SessionMetadata>>(new Map());
   const [showArchived, setShowArchived] = useState(false);
-  const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [detailTab, setDetailTab] = useState<DetailTab>('overview');
+  const [detailScroll, setDetailScroll] = useState(0);
+  const [query, setQuery] = useState('');
+  const [searchActive, setSearchActive] = useState(false);
   const [modals, setModals] = useState<Modal[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [status, setStatus] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [autoOpened, setAutoOpened] = useState(false);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
   const push = useCallback((modal: Modal) => setModals((s) => [...s, modal]), []);
@@ -106,6 +126,7 @@ export function App() {
     [],
   );
 
+  // Discover projects.
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
@@ -123,35 +144,77 @@ export function App() {
     };
   }, [refreshTick]);
 
-  const projectItems = useMemo<ProjectItem[]>(() => {
+  const allProjectItems = useMemo<ProjectItem[]>(() => {
     const items: ProjectItem[] = [{ kind: 'all' }];
-    for (const project of projects ?? []) {
-      items.push({ kind: 'project', project });
-    }
+    for (const project of projects ?? []) items.push({ kind: 'project', project });
     return items;
   }, [projects]);
 
-  const selectedItem = projectItems[Math.min(projectIndex, projectItems.length - 1)] ?? null;
-  const selectedProject = selectedItem?.kind === 'project' ? selectedItem.project : null;
+  const projectItems = useMemo<ProjectItem[]>(() => {
+    if (view !== 'projects' || !query.trim()) return allProjectItems;
+    return allProjectItems.filter(
+      (item) => item.kind === 'all' || SearchService.matchesProject(item.project, query),
+    );
+  }, [allProjectItems, query, view]);
 
+  // Open straight into a project when launched with a path.
+  useEffect(() => {
+    if (autoOpened || !initialProject || !projects) return;
+    setAutoOpened(true);
+    const match = projects.find((p) => p.path === initialProject);
+    if (!match) return;
+    setActiveProject(match);
+    setView('sessions');
+    const index = allProjectItems.findIndex(
+      (item) => item.kind === 'project' && item.project.path === match.path,
+    );
+    if (index >= 0) setProjectIndex(index);
+  }, [autoOpened, initialProject, projects, allProjectItems]);
+
+  /** Encoded folder to current project path, for sessions shown out of context. */
+  const projectByEncoded = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const project of projects ?? []) {
+      if (!project.orphaned) map.set(project.encoded, project.path);
+    }
+    return map;
+  }, [projects]);
+
+  const highlightedItem = projectItems[Math.min(projectIndex, projectItems.length - 1)] ?? null;
+  const highlightedProject = highlightedItem?.kind === 'project' ? highlightedItem.project : null;
+
+  /** The project whose sessions the right side is about. */
+  const scopeProject = view === 'sessions' ? activeProject : highlightedProject;
+
+  // Load sessions for the current scope.
   useEffect(() => {
     let cancelled = false;
     setSessionsLoading(true);
     const load = async () => {
-      if (!selectedItem) return [];
-      if (selectedItem.kind === 'all') {
+      if (view === 'sessions') {
+        if (!activeProject) {
+          return showArchived ? listAllArchivedSessions() : listAllSessions();
+        }
+        return showArchived
+          ? listArchivedSessions(activeProject.encoded)
+          : listSessions(activeProject.encoded);
+      }
+      // Projects view: preview the highlighted project's sessions.
+      if (!highlightedProject) {
         return showArchived ? listAllArchivedSessions() : listAllSessions();
       }
       return showArchived
-        ? listArchivedSessions(selectedItem.project.encoded)
-        : listSessions(selectedItem.project.encoded);
+        ? listArchivedSessions(highlightedProject.encoded)
+        : listSessions(highlightedProject.encoded);
     };
     load()
-      .then((list) => {
+      .then(async (list) => {
         if (cancelled) return;
         setSessions(list);
         setSessionIndex((i) => Math.min(i, Math.max(0, list.length - 1)));
         setSessionsLoading(false);
+        const meta = await SessionMetadataService.getMany(list);
+        if (!cancelled) setMetadata(meta);
       })
       .catch(() => {
         if (!cancelled) {
@@ -162,30 +225,45 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedItem, showArchived, refreshTick]);
+  }, [view, activeProject, highlightedProject, showArchived, refreshTick]);
+
+  const visibleSessions = useMemo(() => {
+    if (view !== 'sessions' || !query.trim()) return sessions;
+    return SearchService.filterSessions(
+      sessions,
+      metadata,
+      activeProject?.path ?? '',
+      query,
+    );
+  }, [sessions, metadata, query, view, activeProject]);
 
   const selectedSession =
-    focus === 'sessions' && sessions.length > 0
-      ? sessions[Math.min(sessionIndex, sessions.length - 1)]
+    view === 'sessions' && visibleSessions.length > 0
+      ? visibleSessions[Math.min(sessionIndex, visibleSessions.length - 1)]
       : null;
 
+  // Deep-analyze the selected session for the detail panel.
   useEffect(() => {
-    setDetail(null);
+    setConversation(null);
+    setDetailScroll(0);
     if (!selectedSession) return;
     let cancelled = false;
-    readSessionDetail(selectedSession)
-      .then((d) => {
-        if (!cancelled) setDetail(d);
+    setConversationLoading(true);
+    ConversationService.analyze(selectedSession)
+      .then((result) => {
+        if (!cancelled) setConversation(result);
       })
       .catch(() => {
-        if (!cancelled) setDetail({ scannedRecords: 0, invalidRecords: 0 });
+        if (!cancelled) setConversation(null);
+      })
+      .finally(() => {
+        if (!cancelled) setConversationLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [selectedSession?.file]);
 
-  /** Run a service operation, then show its report and refresh. */
   const runOp = useCallback(
     (title: string, fn: () => Promise<string[]>) => {
       setBusy(true);
@@ -213,12 +291,7 @@ export function App() {
           if (!value) return;
           const destination = expandHome(value);
           setBusy(true);
-          MoveService.move({
-            source: project.path,
-            destination,
-            parents: true,
-            dryRun: true,
-          })
+          MoveService.move({ source: project.path, destination, parents: true, dryRun: true })
             .then((plan) => {
               setBusy(false);
               push({
@@ -234,11 +307,7 @@ export function App() {
                       destination,
                       parents: true,
                     });
-                    return [
-                      ...report.steps,
-                      '',
-                      `Resume with: cd ${report.destination} && claude --continue`,
-                    ];
+                    return [...report.steps, '', `Resume with: cd ${report.destination} && claude --continue`];
                   });
                 },
               });
@@ -275,12 +344,11 @@ export function App() {
 
   const startPack = useCallback(
     (project: Project) => {
-      const defaultArchive = path.join(os.homedir(), `${path.basename(project.path)}.claudepack`);
       push({
         kind: 'input',
         title: 'Pack project',
         label: `Archive path for ${project.path}`,
-        initial: defaultArchive,
+        initial: path.join(os.homedir(), `${path.basename(project.path)}.claudepack`),
         onResult: (value) => {
           pop();
           if (!value) return;
@@ -289,11 +357,7 @@ export function App() {
               source: project.path,
               archive: expandHome(value),
             });
-            return [
-              ...report.steps,
-              '',
-              `Unpack elsewhere with: lazy-claude unpack ${report.archive} <destination>`,
-            ];
+            return [...report.steps, '', `Unpack with: lazy-claude unpack ${report.archive} <destination>`];
           });
         },
       });
@@ -326,16 +390,8 @@ export function App() {
                 pop();
                 if (!ok) return;
                 runOp('Unpack archive', async () => {
-                  const report = await PackService.unpack({
-                    archive,
-                    destination,
-                    parents: true,
-                  });
-                  return [
-                    ...report.steps,
-                    '',
-                    `Resume with: cd ${report.destination} && claude --continue`,
-                  ];
+                  const report = await PackService.unpack({ archive, destination, parents: true });
+                  return [...report.steps, '', `Resume with: cd ${report.destination} && claude --continue`];
                 });
               },
             });
@@ -419,8 +475,9 @@ export function App() {
       showOverlay('Repair', 'No broken references found. Everything looks good.');
       return;
     }
-    if (selectedProject && !selectedProject.exists && !selectedProject.orphaned) {
-      chooseRepairTarget(selectedProject.path);
+    const target = highlightedProject ?? activeProject;
+    if (target && !target.exists && !target.orphaned) {
+      chooseRepairTarget(target.path);
       return;
     }
     push({
@@ -433,7 +490,7 @@ export function App() {
         chooseRepairTarget(value);
       },
     });
-  }, [projects, selectedProject, chooseRepairTarget, pop, push, showOverlay]);
+  }, [projects, highlightedProject, activeProject, chooseRepairTarget, pop, push, showOverlay]);
 
   const startBackups = useCallback(() => {
     setBusy(true);
@@ -447,8 +504,7 @@ export function App() {
           options: [
             CREATE,
             ...backups.map(
-              (b) =>
-                `${b.name}  ${formatRelativeTime(b.createdAt)}  ${formatBytes(b.sizeBytes)}`,
+              (b) => `${b.name}  ${formatRelativeTime(b.createdAt)}  ${formatBytes(b.sizeBytes)}`,
             ),
           ],
           onResult: (value, index) => {
@@ -520,23 +576,21 @@ export function App() {
       ProjectService.info(project.orphaned ? project.encoded : project.path)
         .then((info) => {
           setBusy(false);
-          const lines = [
-            `Project: ${info.path}`,
-            `Encoded folder: ${info.encoded}`,
-            `Project directory: ${info.projectExists ? 'exists' : 'missing'}`,
-            ...(info.projectExists ? [`Project size: ${formatKb(info.projectSizeKb)}`] : []),
-            `.claude settings: ${info.hasClaudeSettings ? 'found' : 'not found'}`,
-            `Sessions: ${info.sessionCount} file(s), ${formatKb(info.sessionSizeKb)}` +
-              (info.archivedCount > 0 ? ` (+${info.archivedCount} archived)` : ''),
-            ...(info.newestSession
-              ? [`Newest session: ${info.newestSession.toLocaleString()}`]
-              : []),
-            ...(info.oldestSession
-              ? [`Oldest session: ${info.oldestSession.toLocaleString()}`]
-              : []),
-            `History entries: ${info.historyEntries.exact} (${info.historyEntries.nested} nested)`,
-          ];
-          showOverlay(`Info: ${shortenPath(info.path, home)}`, lines.join('\n'));
+          showOverlay(
+            `Info: ${shortenPath(info.path, home)}`,
+            [
+              `Project: ${info.path}`,
+              `Encoded folder: ${info.encoded}`,
+              `Project directory: ${info.projectExists ? 'exists' : 'missing'}`,
+              ...(info.projectExists ? [`Project size: ${formatKb(info.projectSizeKb)}`] : []),
+              `.claude settings: ${info.hasClaudeSettings ? 'found' : 'not found'}`,
+              `Sessions: ${info.sessionCount} file(s), ${formatKb(info.sessionSizeKb)}` +
+                (info.archivedCount > 0 ? ` (+${info.archivedCount} archived)` : ''),
+              ...(info.newestSession ? [`Newest session: ${info.newestSession.toLocaleString()}`] : []),
+              ...(info.oldestSession ? [`Oldest session: ${info.oldestSession.toLocaleString()}`] : []),
+              `History entries: ${info.historyEntries.exact} (${info.historyEntries.nested} nested)`,
+            ].join('\n'),
+          );
         })
         .catch((error: Error) => {
           setBusy(false);
@@ -546,43 +600,42 @@ export function App() {
     [home, showOverlay],
   );
 
-  const confirmSessionAction = useCallback(
+  const sessionAction = useCallback(
     (kind: 'archive' | 'restore' | 'delete', session: SessionEntry) => {
-      const messages: Record<typeof kind, { title: string; message: string; danger: boolean }> = {
+      const spec = {
         archive: {
           title: 'Archive session',
-          message: `Archive session ${session.id}? It moves to the Lazy Claude archive and disappears from Claude Code until restored.`,
+          message: `Archive "${metadata.get(session.file)?.title ?? session.id}"?\n\nIt moves to the Lazy Claude archive and disappears from Claude Code until restored.`,
           danger: false,
         },
         restore: {
           title: 'Restore session',
-          message: `Restore session ${session.id} back into the Claude projects directory?`,
+          message: `Restore "${metadata.get(session.file)?.title ?? session.id}" back into the Claude projects directory?`,
           danger: false,
         },
         delete: {
           title: 'Delete session',
-          message: `Permanently delete session ${session.id}? This removes the session file and cannot be undone.`,
+          message: `Permanently delete "${metadata.get(session.file)?.title ?? session.id}"?\n\nThis removes the session file and cannot be undone.`,
           danger: true,
         },
-      };
-      const { title, message, danger } = messages[kind];
+      }[kind];
       push({
         kind: 'confirm',
-        title,
-        message,
-        danger,
+        title: spec.title,
+        message: spec.message,
+        danger: spec.danger,
         onResult: (ok) => {
           pop();
           if (!ok) return;
           setBusy(true);
-          const action =
+          const run =
             kind === 'archive'
               ? archiveSession(session)
               : kind === 'restore'
                 ? restoreSession(session)
                 : deleteSession(session);
-          action
-            .then(() => setStatus(`${title.split(' ')[0]}d ${session.id.slice(0, 8)}`))
+          run
+            .then(() => setStatus(`${spec.title.split(' ')[0]}d ${session.id.slice(0, 8)}`))
             .catch((error: Error) => setStatus(`Error: ${error.message}`))
             .finally(() => {
               setBusy(false);
@@ -591,8 +644,21 @@ export function App() {
         },
       });
     },
-    [pop, push, refresh],
+    [metadata, pop, push, refresh],
   );
+
+  const checkSession = useCallback((session: SessionEntry) => {
+    setBusy(true);
+    validateSession(session)
+      .then((integrity) =>
+        setStatus(
+          `${session.id.slice(0, 8)}: ${integrity.validRecords}/${integrity.totalLines} valid` +
+            (integrity.ok ? '' : ` (${integrity.invalidLines} invalid)`),
+        ),
+      )
+      .catch((error: Error) => setStatus(`Error: ${error.message}`))
+      .finally(() => setBusy(false));
+  }, []);
 
   const startPrune = useCallback(() => {
     setBusy(true);
@@ -611,10 +677,7 @@ export function App() {
           onResult: (ok) => {
             pop();
             if (!ok) return;
-            runOp('Prune', async () => {
-              const report = await DiagnosticsService.pruneOrphans(false);
-              return report.steps;
-            });
+            runOp('Prune', async () => (await DiagnosticsService.pruneOrphans(false)).steps);
           },
         });
       })
@@ -624,10 +687,214 @@ export function App() {
       });
   }, [pop, push, runOp, showOverlay]);
 
-  // ---- Main keyboard handling -----------------------------------------
+  const openProject = useCallback((item: ProjectItem) => {
+    setActiveProject(item.kind === 'all' ? null : item.project);
+    setView('sessions');
+    setSessionIndex(0);
+    setQuery('');
+    setSearchActive(false);
+  }, []);
+
+  const runDiagnostics = useCallback(() => {
+    setBusy(true);
+    DiagnosticsService.doctor()
+      .then((text) => showOverlay('Diagnostics', text))
+      .finally(() => setBusy(false));
+  }, [showOverlay]);
+
+  const rescanMetadata = useCallback(() => {
+    setBusy(true);
+    SessionMetadataService.clearCache()
+      .then(() => {
+        setStatus('Metadata cache cleared, rescanning…');
+        refresh();
+      })
+      .finally(() => setBusy(false));
+  }, [refresh]);
+
+  // ---- Contextual actions ---------------------------------------------
+
+  const actions = useMemo<Action[]>(() => {
+    const list: Action[] = [];
+    const project = scopeProject;
+
+    if (view === 'projects') {
+      list.push({
+        key: 'enter',
+        label: 'Browse sessions',
+        description: 'Open the session list for this project',
+        run: () => highlightedItem && openProject(highlightedItem),
+      });
+    }
+    if (project) {
+      list.push(
+        {
+          key: 'm',
+          label: 'Move project',
+          description: 'Relocate and migrate every session reference',
+          run: () => startMove(project),
+          disabled: !project.exists,
+          disabledReason: 'project directory is missing',
+        },
+        {
+          key: 'F',
+          label: 'Repair references',
+          description: 'Relink sessions after a manual move',
+          run: startRepair,
+        },
+        {
+          key: 'p',
+          label: 'Pack project',
+          description: 'Archive project and sessions into .claudepack',
+          run: () => startPack(project),
+          disabled: !project.exists,
+          disabledReason: 'project directory is missing',
+        },
+        {
+          key: 'i',
+          label: 'Project info',
+          description: 'Sizes, session counts, history entries',
+          run: () => showInfo(project),
+        },
+        {
+          key: 'D',
+          label: 'Remove project',
+          description: 'Delete the project and all session data',
+          run: () => startRemove(project),
+          disabled: !project.exists,
+          disabledReason: 'project directory is missing',
+          danger: true,
+        },
+      );
+    }
+    if (view === 'sessions' && selectedSession) {
+      list.push(
+        {
+          key: 'a',
+          label: 'Archive session',
+          description: 'Hide from Claude Code, reversible',
+          run: () => sessionAction('archive', selectedSession),
+          disabled: selectedSession.archived,
+          disabledReason: 'already archived',
+        },
+        {
+          key: 'r',
+          label: 'Restore session',
+          description: 'Move back into the projects directory',
+          run: () => sessionAction('restore', selectedSession),
+          disabled: !selectedSession.archived,
+          disabledReason: 'session is not archived',
+        },
+        {
+          key: 'c',
+          label: 'Check integrity',
+          description: 'Validate every record in the session file',
+          run: () => checkSession(selectedSession),
+        },
+        {
+          key: 'd',
+          label: 'Delete session',
+          description: 'Permanently remove the session file',
+          run: () => sessionAction('delete', selectedSession),
+          danger: true,
+        },
+      );
+    }
+    list.push(
+      {
+        key: 'U',
+        label: 'Unpack archive',
+        description: 'Restore a .claudepack to a new location',
+        run: startUnpack,
+      },
+      {
+        key: 'B',
+        label: 'Backup manager',
+        description: 'Create, restore, or delete history backups',
+        run: startBackups,
+      },
+      {
+        key: 'V',
+        label: 'Health check',
+        description: 'Find broken references and orphaned data',
+        run: () => {
+          setBusy(true);
+          DiagnosticsService.healthCheck()
+            .then((report) => showOverlay('Health check', report.text))
+            .finally(() => setBusy(false));
+        },
+      },
+      {
+        key: 'P',
+        label: 'Prune orphans',
+        description: 'Delete session folders with no project',
+        run: startPrune,
+      },
+      {
+        key: 'g',
+        label: 'Run diagnostics',
+        description: 'Environment summary and counts',
+        run: runDiagnostics,
+      },
+      {
+        key: 'R',
+        label: 'Rescan',
+        description: 'Rediscover projects and sessions',
+        run: refresh,
+      },
+      {
+        key: 'M',
+        label: 'Refresh metadata',
+        description: 'Clear the title cache and re-read sessions',
+        run: rescanMetadata,
+      },
+    );
+    return list;
+  }, [
+    view,
+    scopeProject,
+    highlightedItem,
+    selectedSession,
+    openProject,
+    startMove,
+    startRepair,
+    startPack,
+    startRemove,
+    showInfo,
+    sessionAction,
+    checkSession,
+    startUnpack,
+    startBackups,
+    startPrune,
+    runDiagnostics,
+    refresh,
+    rescanMetadata,
+    showOverlay,
+  ]);
+
+  // ---- Keyboard --------------------------------------------------------
+
+  const inputActive = modals.length === 0 && !menuOpen && !busy;
 
   useInput(
     (input, key) => {
+      // Search capture takes priority while typing.
+      if (searchActive) {
+        if (key.escape) {
+          setQuery('');
+          setSearchActive(false);
+        } else if (key.return) {
+          setSearchActive(false);
+        } else if (key.backspace || key.delete) {
+          setQuery((q) => q.slice(0, -1));
+        } else if (input && !key.ctrl && !key.meta) {
+          setQuery((q) => q + input);
+          setProjectIndex(0);
+          setSessionIndex(0);
+        }
+        return;
+      }
+
       if (input === 'q') {
         exit();
         return;
@@ -636,32 +903,17 @@ export function App() {
         showOverlay('Help', HELP_TEXT);
         return;
       }
+      if (input === 'x') {
+        setMenuOpen(true);
+        return;
+      }
+      if (input === '/') {
+        setSearchActive(true);
+        return;
+      }
       if (input === 'R') {
         setStatus('Refreshing…');
         refresh();
-        return;
-      }
-      if (input === 'V') {
-        setBusy(true);
-        DiagnosticsService.healthCheck()
-          .then((report) => showOverlay('Health check', report.text))
-          .finally(() => setBusy(false));
-        return;
-      }
-      if (input === 'P') {
-        startPrune();
-        return;
-      }
-      if (input === 'B') {
-        startBackups();
-        return;
-      }
-      if (input === 'U') {
-        startUnpack();
-        return;
-      }
-      if (input === 'F') {
-        startRepair();
         return;
       }
       if (input === 't') {
@@ -669,125 +921,114 @@ export function App() {
         setSessionIndex(0);
         return;
       }
-      if (input === 'i' && selectedProject) {
-        showInfo(selectedProject);
+
+      // Detail tab switching and scrolling.
+      if (key.tab) {
+        setDetailTab((t) => DETAIL_TABS[(DETAIL_TABS.indexOf(t) + 1) % DETAIL_TABS.length]);
+        setDetailScroll(0);
+        return;
+      }
+      if (/^[1-4]$/.test(input)) {
+        setDetailTab(DETAIL_TABS[Number.parseInt(input, 10) - 1]);
+        setDetailScroll(0);
+        return;
+      }
+      if (input === 'J') {
+        setDetailScroll((s) => s + 1);
+        return;
+      }
+      if (input === 'K') {
+        setDetailScroll((s) => Math.max(0, s - 1));
         return;
       }
 
-      if (key.tab || key.rightArrow || input === 'l') {
-        setFocus('sessions');
-        return;
-      }
-      if (key.leftArrow || input === 'h') {
-        setFocus('projects');
+      // Global service shortcuts, mirrored in the action menu.
+      const shortcut = actions.find((a) => a.key === input && !a.disabled && a.key.length === 1);
+      const navigationKeys = new Set(['k', 'j', 'l', 'h']);
+      if (shortcut && !navigationKeys.has(input)) {
+        shortcut.run();
         return;
       }
 
-      if (focus === 'projects') {
+      if (view === 'projects') {
         if (key.upArrow || input === 'k') {
           setProjectIndex((i) => Math.max(0, i - 1));
-          setSessionIndex(0);
         } else if (key.downArrow || input === 'j') {
           setProjectIndex((i) => Math.min(projectItems.length - 1, i + 1));
-          setSessionIndex(0);
-        } else if (key.return) {
-          setFocus('sessions');
-        } else if (selectedProject) {
-          if (input === 'm' && selectedProject.exists) startMove(selectedProject);
-          else if (input === 'D' && selectedProject.exists) startRemove(selectedProject);
-          else if (input === 'p' && selectedProject.exists) startPack(selectedProject);
+        } else if (key.return || key.rightArrow || input === 'l') {
+          if (highlightedItem) openProject(highlightedItem);
         }
         return;
       }
 
-      // Sessions panel
-      if (key.escape) {
-        setFocus('projects');
+      // Sessions view
+      if (key.escape || key.leftArrow || input === 'h') {
+        setView('projects');
+        setQuery('');
         return;
       }
       if (key.upArrow || input === 'k') {
         setSessionIndex((i) => Math.max(0, i - 1));
-        return;
-      }
-      if (key.downArrow || input === 'j') {
-        setSessionIndex((i) => Math.min(Math.max(0, sessions.length - 1), i + 1));
-        return;
-      }
-
-      const current = sessions[Math.min(sessionIndex, sessions.length - 1)];
-      if (!current) return;
-
-      if (input === 'a' && !current.archived) confirmSessionAction('archive', current);
-      else if (input === 'r' && current.archived) confirmSessionAction('restore', current);
-      else if (input === 'd' || input === 'x') confirmSessionAction('delete', current);
-      else if (input === 'c') {
-        setBusy(true);
-        validateSession(current)
-          .then((integrity) =>
-            setStatus(
-              `${current.id.slice(0, 8)}: ${integrity.validRecords}/${integrity.totalLines} valid` +
-                (integrity.ok ? '' : ` (${integrity.invalidLines} invalid!)`),
-            ),
-          )
-          .catch((error: Error) => setStatus(`Error: ${error.message}`))
-          .finally(() => setBusy(false));
+      } else if (key.downArrow || input === 'j') {
+        setSessionIndex((i) => Math.min(Math.max(0, visibleSessions.length - 1), i + 1));
       }
     },
-    { isActive: modals.length === 0 && !busy },
+    { isActive: inputActive },
   );
 
-  // ---- Layout ---------------------------------------------------------
+  // ---- Layout ----------------------------------------------------------
 
   const mainHeight = rows - 1;
-  const projectsWidth = Math.min(46, Math.max(28, Math.floor(columns * 0.35)));
-  const detailHeight = Math.min(13, Math.max(8, Math.floor(mainHeight * 0.35)));
-  const sessionsHeight = mainHeight - detailHeight;
-  const projectsViewport = mainHeight - 3;
-  const sessionsViewport = sessionsHeight - 3;
+  const leftWidth = Math.min(56, Math.max(30, Math.floor(columns * 0.36)));
+  // Panel borders take 2 columns, the row's own padding takes 2 more.
+  const rowWidth = Math.max(10, leftWidth - 4);
+  const listHeight = mainHeight - 4;
+  const detailHeight = mainHeight - 4;
+
+  const listTitle =
+    view === 'projects'
+      ? `Projects (${(projects ?? []).length})`
+      : `Sessions${activeProject ? `: ${shortenPath(activeProject.orphaned ? activeProject.encoded : activeProject.path, home)}` : ': all projects'}`;
+
+  const detailTitle =
+    view === 'sessions' && selectedSession
+      ? DETAIL_TABS.map((t) => (t === detailTab ? `[${t}]` : ` ${t} `)).join('')
+      : scopeProject
+        ? `Project: ${shortenPath(scopeProject.orphaned ? scopeProject.encoded : scopeProject.path, home)}`
+        : 'Overview';
 
   const bindings: Array<[string, string]> =
-    focus === 'sessions'
+    view === 'projects'
       ? [
           ['↑↓', 'navigate'],
-          ['a', 'archive'],
-          showArchived ? ['r', 'restore'] : ['d', 'delete'],
-          ['c', 'check'],
-          ['t', showArchived ? 'live view' : 'archived'],
-          ['esc', 'projects'],
+          ['enter', 'sessions'],
+          ['x', 'actions'],
+          ['/', 'search'],
+          ['m', 'move'],
+          ['F', 'repair'],
+          ['V', 'health'],
           ['?', 'help'],
           ['q', 'quit'],
         ]
       : [
           ['↑↓', 'navigate'],
-          ['m', 'move'],
-          ['F', 'repair'],
-          ['D', 'remove'],
-          ['p', 'pack'],
-          ['B', 'backups'],
-          ['V', 'health'],
-          ['?', 'help'],
+          ['tab', 'detail tab'],
+          ['x', 'actions'],
+          ['/', 'search'],
+          ['a', 'archive'],
+          ['d', 'delete'],
+          ['t', showArchived ? 'live' : 'archived'],
+          ['esc', 'back'],
           ['q', 'quit'],
         ];
 
-  const sessionsTitle = `${showArchived ? 'Archived sessions' : 'Sessions'}${
-    selectedItem?.kind === 'project'
-      ? `: ${shortenPath(selectedProject!.orphaned ? selectedProject!.encoded : selectedProject!.path, home)}`
-      : ': all projects'
-  }`;
-
   const topModal = modals[modals.length - 1] ?? null;
 
-  return (
-    <Box flexDirection="column" width={columns} height={rows}>
-      {topModal ? (
-        topModal.kind === 'overlay' ? (
-          <OverlayView
-            modal={topModal}
-            active={!busy}
-            width={columns}
-            height={mainHeight}
-            onClose={pop}
-          />
+  if (topModal) {
+    return (
+      <Box flexDirection="column" width={columns} height={rows}>
+        {topModal.kind === 'overlay' ? (
+          <OverlayView modal={topModal} active={!busy} width={columns} height={mainHeight} onClose={pop} />
         ) : (
           <Box
             width={columns}
@@ -804,12 +1045,47 @@ export function App() {
               <SelectDialog key={modals.length} modal={topModal} active={!busy} />
             )}
           </Box>
-        )
-      ) : (
-        <Box height={mainHeight}>
-          <Panel title="Projects" focused={focus === 'projects'} width={projectsWidth}>
-            {loadError && projects === null ? (
-              <Box paddingX={1} flexDirection="column">
+        )}
+        <HelpBar bindings={bindings} status={busy ? 'Working…' : status} />
+      </Box>
+    );
+  }
+
+  if (menuOpen) {
+    return (
+      <Box flexDirection="column" width={columns} height={rows}>
+        <Box
+          width={columns}
+          height={mainHeight}
+          alignItems="center"
+          justifyContent="center"
+          flexDirection="column"
+        >
+          <ActionMenu
+            title={view === 'projects' ? 'Project actions' : 'Session actions'}
+            actions={actions}
+            active
+            onClose={() => setMenuOpen(false)}
+          />
+        </Box>
+        <HelpBar bindings={bindings} status={busy ? 'Working…' : status} />
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column" width={columns} height={rows}>
+      <Box height={mainHeight}>
+        <Panel title={listTitle} focused width={leftWidth} height={mainHeight}>
+          <SearchBar
+            query={query}
+            active={searchActive}
+            matches={view === 'projects' ? projectItems.length : visibleSessions.length}
+            total={view === 'projects' ? allProjectItems.length : sessions.length}
+          />
+          {view === 'projects' ? (
+            loadError && projects === null ? (
+              <Box paddingX={1}>
                 <Text color="red" wrap="wrap">
                   {loadError}
                 </Text>
@@ -822,74 +1098,86 @@ export function App() {
               <ListView
                 items={projectItems}
                 selectedIndex={projectIndex}
-                height={projectsViewport}
-                focused={focus === 'projects'}
-                width={projectsWidth - 2}
-                emptyMessage="No projects found"
-                renderItem={(item) => {
-                  if (item.kind === 'all') {
-                    return <Text bold>▣ All sessions</Text>;
-                  }
-                  const p = item.project;
-                  const dot = p.orphaned ? '◌' : p.exists ? '●' : '○';
-                  const dotColor = p.orphaned ? 'yellow' : p.exists ? 'green' : 'red';
-                  const label = p.orphaned ? p.encoded : shortenPath(p.path, home);
-                  return (
-                    <>
-                      <Text color={dotColor}>{dot} </Text>
-                      <Text>{label}</Text>
-                      <Text dimColor> ({p.sessions})</Text>
-                    </>
-                  );
-                }}
+                height={listHeight}
+                focused
+                linesPerItem={2}
+                emptyMessage="No projects match"
+                renderItem={(item, selected) =>
+                  item.kind === 'all' ? (
+                    <AllSessionsRow
+                      selected={selected}
+                      count={(projects ?? []).reduce((sum, p) => sum + p.sessions, 0)}
+                      width={rowWidth}
+                    />
+                  ) : (
+                    <ProjectRow
+                      project={item.project}
+                      selected={selected}
+                      home={home}
+                      width={rowWidth}
+                    />
+                  )
+                }
+              />
+            )
+          ) : sessionsLoading ? (
+            <Box paddingX={1}>
+              <Text dimColor>Loading sessions…</Text>
+            </Box>
+          ) : (
+            <ListView
+              items={visibleSessions}
+              selectedIndex={sessionIndex}
+              height={listHeight}
+              focused
+              linesPerItem={2}
+              emptyMessage={showArchived ? 'No archived sessions' : 'No sessions'}
+              renderItem={(session, selected) => (
+                <SessionRow
+                  session={session}
+                  metadata={metadata.get(session.file)}
+                  selected={selected}
+                  showProject={activeProject === null}
+                  home={home}
+                  width={rowWidth}
+                />
+              )}
+            />
+          )}
+        </Panel>
+
+        <Box flexDirection="column" flexGrow={1}>
+          <Panel title={detailTitle} focused={false} height={mainHeight}>
+            {view === 'sessions' && selectedSession ? (
+              <SessionDetail
+                session={selectedSession}
+                metadata={metadata.get(selectedSession.file)}
+                conversation={conversation}
+                loading={conversationLoading}
+                tab={detailTab}
+                home={home}
+                height={detailHeight}
+                scroll={detailScroll}
+                projectPath={
+                  activeProject && !activeProject.orphaned
+                    ? activeProject.path
+                    : projectByEncoded.get(selectedSession.encoded)
+                }
+              />
+            ) : (
+              <ProjectDetail
+                project={scopeProject}
+                sessions={sessions}
+                metadata={metadata}
+                loading={sessionsLoading}
+                projects={projects}
+                home={home}
+                height={detailHeight}
               />
             )}
           </Panel>
-          <Box flexDirection="column" flexGrow={1}>
-            <Panel title={sessionsTitle} focused={focus === 'sessions'} height={sessionsHeight}>
-              {sessionsLoading ? (
-                <Box paddingX={1}>
-                  <Text dimColor>Loading sessions…</Text>
-                </Box>
-              ) : (
-                <ListView
-                  items={sessions}
-                  selectedIndex={sessionIndex}
-                  height={sessionsViewport}
-                  focused={focus === 'sessions'}
-                  width={columns - projectsWidth - 2}
-                  emptyMessage={showArchived ? 'No archived sessions' : 'No sessions'}
-                  renderItem={(s) => (
-                    <>
-                      <Text color="cyan">{s.id.slice(0, 8)}</Text>
-                      <Text dimColor> {formatRelativeTime(s.modifiedAt).padStart(9)}</Text>
-                      <Text dimColor> {formatBytes(s.sizeBytes).padStart(9)}</Text>
-                      {selectedItem?.kind === 'all' ? <Text> {s.encoded}</Text> : null}
-                    </>
-                  )}
-                />
-              )}
-            </Panel>
-            <DetailPanel
-              height={detailHeight}
-              session={selectedSession}
-              detail={detail}
-              project={selectedProject}
-              showingSession={focus === 'sessions' && selectedSession !== null}
-              allSummary={
-                selectedItem?.kind === 'all' && projects
-                  ? {
-                      projects: projects.length,
-                      sessions: projects.reduce((sum, p) => sum + p.sessions, 0),
-                      broken: projects.filter((p) => !p.exists && !p.orphaned).length,
-                      orphans: projects.filter((p) => p.orphaned).length,
-                    }
-                  : null
-              }
-            />
-          </Box>
         </Box>
-      )}
+      </Box>
       <HelpBar bindings={bindings} status={busy ? 'Working…' : status} />
     </Box>
   );

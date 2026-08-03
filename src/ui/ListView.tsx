@@ -4,22 +4,27 @@ import { Box, Text } from 'ink';
 interface ListViewProps<T> {
   items: T[];
   selectedIndex: number;
-  /** Visible rows available for list items. */
+  /** Visible rows available for list content. */
   height: number;
   focused: boolean;
-  renderItem: (item: T, selected: boolean, width: number) => React.ReactNode;
-  width: number;
+  /** Rendered lines per item. Two-line rows show a title plus a meta line. */
+  linesPerItem?: number;
+  renderItem: (item: T, selected: boolean, index: number) => React.ReactNode;
   emptyMessage: string;
 }
 
-/** Scrollable list that keeps the selected row inside the visible window. */
+/**
+ * Scrollable list that keeps the selected row inside the visible window.
+ * Items may render more than one line; the viewport maths use
+ * `linesPerItem` so scrolling stays aligned to item boundaries.
+ */
 export function ListView<T>({
   items,
   selectedIndex,
   height,
   focused,
+  linesPerItem = 1,
   renderItem,
-  width,
   emptyMessage,
 }: ListViewProps<T>) {
   if (items.length === 0) {
@@ -30,31 +35,30 @@ export function ListView<T>({
     );
   }
 
-  const visible = Math.max(1, height);
+  const visibleItems = Math.max(1, Math.floor(height / linesPerItem));
   let offset = 0;
-  if (selectedIndex >= visible) {
-    offset = selectedIndex - visible + 1;
-  }
-  offset = Math.min(offset, Math.max(0, items.length - visible));
-  const slice = items.slice(offset, offset + visible);
+  if (selectedIndex >= visibleItems) offset = selectedIndex - visibleItems + 1;
+  offset = Math.min(offset, Math.max(0, items.length - visibleItems));
+  const slice = items.slice(offset, offset + visibleItems);
 
   return (
     <Box flexDirection="column">
       {slice.map((item, i) => {
         const index = offset + i;
-        const selected = index === selectedIndex;
         return (
-          <Box key={index} paddingX={1}>
-            <Text
-              backgroundColor={selected && focused ? 'blue' : undefined}
-              color={selected && !focused ? 'blue' : undefined}
-              wrap="truncate"
-            >
-              {renderItem(item, selected, width)}
-            </Text>
+          <Box key={index} flexDirection="column">
+            {renderItem(item, index === selectedIndex, index)}
           </Box>
         );
       })}
+      {items.length > visibleItems ? (
+        <Box paddingX={1}>
+          <Text dimColor>
+            {offset + 1}-{Math.min(offset + visibleItems, items.length)} of {items.length}
+            {focused ? '' : ' '}
+          </Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }

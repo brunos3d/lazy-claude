@@ -1,4 +1,14 @@
-import { formatBytes, formatKb } from '../core/format.js';
+import {
+  formatBytes,
+  formatClock,
+  formatDuration,
+  formatKb,
+  formatRelativeTime,
+  formatTokens,
+} from '../core/format.js';
+import { ConversationService } from '../services/ConversationService.js';
+import { SessionMetadataService } from '../services/SessionMetadataService.js';
+import { SearchService, toSearchDocument } from '../services/SearchService.js';
 import { BackupService } from '../services/BackupService.js';
 import { DiagnosticsService } from '../services/DiagnosticsService.js';
 import { DiscoveryService } from '../services/DiscoveryService.js';
@@ -48,16 +58,129 @@ const commands: Record<string, Command> = {
   async sessions({ positional, flags }) {
     const archived = positional[0] === 'archived';
     const sessions = archived ? await listAllArchivedSessions() : await listAllSessions();
+    const metadata = await SessionMetadataService.getMany(sessions);
     if (flags.json) {
-      console.log(JSON.stringify(sessions, null, 2));
+      console.log(
+        JSON.stringify(
+          sessions.map((s) => ({ ...s, metadata: metadata.get(s.file) ?? null })),
+          null,
+          2,
+        ),
+      );
       return 0;
     }
     for (const s of sessions) {
+      const meta = metadata.get(s.file);
+      console.log(meta?.title ?? s.id);
       console.log(
-        `${s.id}  ${s.modifiedAt.toISOString()}  ${formatBytes(s.sizeBytes).padStart(9)}  ${s.encoded}`,
+        `  ${s.id.slice(0, 8)} · ${formatRelativeTime(s.modifiedAt)} · ${formatBytes(s.sizeBytes)}` +
+          (meta?.gitBranch ? ` · ${meta.gitBranch}` : '') +
+          (archived ? ' · archived' : ''),
       );
     }
     console.log(`\n${sessions.length} ${archived ? 'archived ' : ''}sessions`);
+    return 0;
+  },
+
+  async search({ positional, flags }) {
+    const query = positional.join(' ');
+    if (!query.trim()) {
+      console.error('Usage: lazy-claude search <query>');
+      return 1;
+    }
+    const sessions = [...(await listAllSessions()), ...(await listAllArchivedSessions())];
+    const metadata = await SessionMetadataService.getMany(sessions);
+    // Resolve each session's CURRENT project, not the cwd baked into the
+    // file, which stays at the old location after a move.
+    const byEncoded = new Map(
+      (await DiscoveryService.discoverProjects())
+        .filter((p) => !p.orphaned)
+        .map((p) => [p.encoded, p.path]),
+    );
+    const pathOf = (s: (typeof sessions)[number]) =>
+      byEncoded.get(s.encoded) ?? metadata.get(s.file)?.cwd ?? s.encoded;
+    const matches = sessions.filter((s) =>
+      SearchService.matchesSession(toSearchDocument(s, metadata.get(s.file), pathOf(s)), query),
+    );
+    if (flags.json) {
+      console.log(
+        JSON.stringify(
+          matches.map((s) => ({ ...s, metadata: metadata.get(s.file) ?? null })),
+          null,
+          2,
+        ),
+      );
+      return 0;
+    }
+    for (const s of matches) {
+      console.log(metadata.get(s.file)?.title ?? s.id);
+      console.log(`  ${s.id.slice(0, 8)} · ${formatRelativeTime(s.modifiedAt)} · ${pathOf(s)}`);
+    }
+    console.log(`\n${matches.length} of ${sessions.length} sessions match "${query}"`);
+    return matches.length > 0 ? 0 : 1;
+  },
+
+  async show({ positional, flags }) {
+    const id = positional[0];
+    if (!id) {
+      console.error('Usage: lazy-claude show <session-id>');
+      return 1;
+    }
+    const session = await findSessionById(id);
+    if (!session) {
+      console.error(`Session not found: ${id}`);
+      return 1;
+    }
+    const meta = await SessionMetadataService.get(session);
+    const conversation = await ConversationService.analyze(session);
+    if (flags.json) {
+      console.log(JSON.stringify({ session, metadata: meta, conversation }, null, 2));
+      return 0;
+    }
+
+    const { stats } = conversation;
+    console.log(meta.title);
+    console.log('='.repeat(Math.min(meta.title.length, 72)));
+    console.log(`Session:   ${session.id}`);
+    console.log(`Project:   ${meta.cwd ?? session.encoded}`);
+    if (meta.gitBranch) console.log(`Branch:    ${meta.gitBranch}`);
+    if (meta.relocatedCwd) console.log(`Relocated: ${meta.relocatedCwd}`);
+    console.log(
+      `Modified:  ${formatRelativeTime(session.modifiedAt)} (${session.modifiedAt.toLocaleString()})`,
+    );
+    console.log(`Size:      ${formatBytes(session.sizeBytes)}${session.archived ? ' [archived]' : ''}`);
+    if (meta.version) console.log(`Version:   Claude Code ${meta.version}`);
+    console.log('');
+    console.log('Statistics');
+    console.log(`  Messages:   ${stats.userMessages} user / ${stats.assistantMessages} assistant`);
+    console.log(`  Tool calls: ${stats.toolCalls}`);
+    console.log(`  Files:      ${stats.filesTouched.length} touched, ${stats.filesCreated.length} created`);
+    if (stats.inputTokens > 0) {
+      console.log(`  Tokens:     ${formatTokens(stats.inputTokens)} in / ${formatTokens(stats.outputTokens)} out`);
+    }
+    if (stats.durationMs > 0) console.log(`  Duration:   ${formatDuration(stats.durationMs)}`);
+    if (stats.models.length > 0) console.log(`  Model:      ${stats.models.join(', ')}`);
+
+    const tools = ConversationService.topTools(stats);
+    if (tools.length > 0) {
+      console.log('');
+      console.log('Top tools');
+      for (const [name, count] of tools) console.log(`  ${name.padEnd(14)} ${count}`);
+    }
+    if (conversation.preview.length > 0) {
+      console.log('');
+      console.log('Preview');
+      for (const exchange of conversation.preview) {
+        console.log(`  ${exchange.role === 'user' ? 'User' : 'Assistant'}: ${exchange.text}`);
+      }
+    }
+    if (conversation.timeline.length > 0) {
+      console.log('');
+      console.log('Timeline');
+      for (const event of conversation.timeline.slice(0, 20)) {
+        console.log(`  ${formatClock(event.timestamp)}  ${event.label}`);
+      }
+    }
     return 0;
   },
 

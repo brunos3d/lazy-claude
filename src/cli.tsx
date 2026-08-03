@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import React from 'react';
 import { render } from 'ink';
+import os from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { runCommand } from './cli/commands.js';
+import { WorkspaceResolver } from './services/WorkspaceResolver.js';
 import { App } from './ui/App.js';
 
 const require = createRequire(import.meta.url);
@@ -11,10 +14,15 @@ const { version } = require('../package.json') as { version: string };
 const USAGE = `lazy-claude ${version}: a LazyGit-style manager for Claude Code sessions
 
 Usage:
-  lazy-claude                          Open the TUI (also available as lzc)
+  lazy-claude                          Open the TUI
+  lazy-claude .                        Open the TUI on the current workspace
+  lazy-claude <path>                   Open the TUI on a specific project
+                                       (aliases: lazyclaude, lzc)
 
   lazy-claude list [--json]            List all projects
-  lazy-claude sessions [archived]      List all sessions
+  lazy-claude sessions [archived]      List all sessions with titles
+  lazy-claude show <session-id>        Session stats, timeline and preview
+  lazy-claude search <query>           Search sessions by title, id or path
   lazy-claude info [path] [--json]     Project details (defaults to cwd)
   lazy-claude doctor                   Environment summary
   lazy-claude verify                   Health check
@@ -58,7 +66,11 @@ async function main() {
   }
 
   const command = args[0];
-  if (command) {
+
+  // `lazy-claude .` and `lazy-claude <path>` open the TUI on that workspace.
+  const workspaceArg = WorkspaceResolver.looksLikePath(command) ? command : undefined;
+
+  if (command && !workspaceArg) {
     const code = await runCommand(command, args.slice(1));
     if (code === -1) {
       console.error(`Unknown command: ${command}\n`);
@@ -68,6 +80,18 @@ async function main() {
       process.exitCode = code;
     }
     return;
+  }
+
+  let initialProject: string | undefined;
+  if (workspaceArg) {
+    const target = path.resolve(expandHome(workspaceArg));
+    const match = await WorkspaceResolver.resolve(target);
+    if (match) initialProject = match.project.path;
+    else {
+      console.error(
+        `No Claude Code sessions found for ${target}. Opening the full project list instead.`,
+      );
+    }
   }
 
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
@@ -81,8 +105,16 @@ async function main() {
   const restoreScreen = () => process.stdout.write('\u001B[?1049l');
   process.on('exit', restoreScreen);
 
-  const { waitUntilExit } = render(<App />, { exitOnCtrlC: true });
+  const { waitUntilExit } = render(<App initialProject={initialProject} />, { exitOnCtrlC: true });
   await waitUntilExit();
+}
+
+function expandHome(input: string): string {
+  if (input === '~') return os.homedir();
+  if (input.startsWith('~/') || input.startsWith('~\\')) {
+    return path.join(os.homedir(), input.slice(2));
+  }
+  return input;
 }
 
 main().catch((error: Error) => {
