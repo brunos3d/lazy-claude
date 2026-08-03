@@ -1,0 +1,44 @@
+{
+  "name": "lazy-clamp",
+  "version": "0.1.0",
+  "description": "LazyGit-style TUI for managing Claude Code sessions, built on top of Clamp",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brunos3d/lazy-clamp.git"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "tui",
+    "cli",
+    "clamp",
+    "sessions"
+  ],
+  "bin": {
+    "lazy-clamp": "dist/cli.js",
+    "lzclamp": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "ink": "^7.1.1",
+    "react": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "typescript": "^7.0.2"
+  }
+}
