@@ -95,12 +95,10 @@ export interface SearchHit {
 
 export interface SearchGroup {
   kind: ResultKind;
-  /** Header text, for example "Projects". */
+  /** Tab label, for example "Projects". */
   title: string;
-  /** Already capped to the provider's limit. */
+  /** Every hit the provider returned. Nothing is capped. */
   hits: SearchHit[];
-  /** Hit count before the cap, for the "+N more" line. */
-  total: number;
 }
 
 export type JumpTarget =
@@ -130,10 +128,8 @@ export interface SearchContext {
 export interface SearchProvider {
   id: string;
   kind: ResultKind;
-  /** Group header text. */
+  /** Tab label. */
   title: string;
-  /** Maximum hits shown in the palette. */
-  limit: number;
   enabled(context: SearchContext): boolean;
   search(query: string, context: SearchContext): Promise<SearchHit[]>;
 }
@@ -141,10 +137,9 @@ export interface SearchProvider {
 
 Providers are stateless. They receive a context and return hits.
 
-A provider describes what it provides, not where it appears. `limit` stays
-on the provider because how many results are useful is intrinsic to the
-domain. Group ordering does not, because it is a presentation decision that
-belongs to the engine:
+A provider describes what it provides, not where it appears or how much of
+it is shown. Both of those are presentation decisions that belong to the
+engine and the palette. Group ordering lives here:
 
 ```ts
 const GROUP_ORDER: ResultKind[] = ['project', 'session', 'message'];
@@ -225,9 +220,10 @@ batches, which is what keeps Ink responsive while the warm-up runs.
 - `search(query, index)` builds the `SearchContext`, owns the
   `AbortController`, and aborts the previous run when a new query arrives.
 - Runs enabled providers in parallel with `Promise.all`.
-- Drops groups with zero hits, so empty groups never render.
-- Sorts groups by `GROUP_ORDER` and caps each to `provider.limit`, keeping
-  the true count in `SearchGroup.total`.
+- Drops groups with zero hits, so empty groups never render and a disabled
+  provider never produces a tab.
+- Sorts groups by `GROUP_ORDER`. Nothing is capped: each group gets its own
+  scrollable tab, so a ceiling here would only hide results.
 
 Providers never construct a context or an abort controller themselves.
 
@@ -293,26 +289,58 @@ and then through `useModalWidth`. Body height is about `rows * 0.6`. Chrome
 degrades through the same compact and tiny tiers `ActionMenu` uses, and
 below a threshold hits collapse from two lines to one.
 
-Rows flatten to `header | hit | more | spacer`. The cursor only lands on
-`hit`; headers, `+N more` lines, and spacers are skipped. Windowing keeps a
-group's header on screen alongside its first visible hit.
+Only one category is visible at a time. A tab bar sits under the input, in
+the same visual language as the inspector's `TabBar`: the active tab is a
+filled blue chip, the rest are muted, and each carries its full result
+count. The active tab owns the whole result area.
 
-Per-provider limits: Projects 6, Sessions 12, Conversation 10.
+That is what makes every hit reachable. Rendering all groups at once forced
+a per-group cap, and anything past the cap could not be scrolled to because
+navigation ran on into the next group instead of into the remainder. With
+one category per tab the viewport is the only limit, so 34 matching
+projects means 34 scrollable rows.
+
+Unlike the inspector's tabs these carry no number prefix. The inspector can
+bind 1..4 because its panel is not a text field; here every printable
+character has to reach the query, so tabs move on tab and shift+tab only.
 
 Group order is fixed by `GROUP_ORDER`: Projects, then Sessions, then
-Messages. The same
-query always puts the same kind of result in the same place, which is what
-makes the palette usable from muscle memory. Each group is capped and shows
-a dim `+N more` line when truncated. Narrowing is done by typing, not by
-expanding a group.
+Messages. The same query always puts the same kind of result in the same
+place, which is what makes the palette usable from muscle memory.
 
-Visual separation from the action dialogs: `borderStyle="round"` with a blue
-accent instead of the cyan double border, and a tall input row with a `❯`
-prompt and an inverse cursor block. `Modal` currently hardcodes
-`borderStyle="double"`, so it gains a `borderStyle` prop.
+The active tab is derived, never stored as an index: it is the group whose
+kind matches the remembered one, falling back to the first group. Since the
+engine drops empty groups, that fallback is exactly the "never land on an
+empty tab" rule. If the category the user was on stops matching, they land
+on one that still has results.
 
-Keys: up and down move through hits, enter jumps, esc closes, typing
-updates results live.
+Each tab keeps its own cursor and scroll offset, so leaving Projects at
+item 18 for Sessions and coming back restores item 18. Editing the query
+resets all of them, because the result sets underneath have changed.
+
+Rows flatten to `hit | hitSub | spacer`, plus `header` and `recent` in the
+no-query view. The cursor only lands on `hit` and `recent`.
+
+Visual separation from the action dialogs comes from the frame and the
+layout, not from special characters: `borderStyle="round"` with a blue
+accent instead of the cyan double border, and a taller input row with an
+inverse cursor block. `Modal` currently hardcodes `borderStyle="double"`,
+so it gains a `borderStyle` prop.
+
+The prompt is a plain `>`, the same one `InputDialog` uses. Modal rows pad
+their opaque background by counting characters, so a glyph that renders
+double-width in some locales (`❯` among them) would desync the padding and
+let the interface behind show through. Nothing inside a modal may use a
+character whose width is ambiguous across terminals.
+
+Result rows need per-character highlight markup, which `ModalLine`'s flat
+segments cannot express, so the palette renders them as its own `Text`.
+`Modal.tsx` exports `ROW_BACKGROUND` and `rowPadding` for that, keeping the
+opaque-row behaviour in one place without widening `ModalLine`'s API.
+
+Keys: up and down move through the active tab's hits, tab and shift+tab
+move between categories, enter jumps, esc closes, typing updates results
+live.
 
 The palette always opens with an empty query. Nothing carries over from the
 previous open, so the first keystroke always starts a fresh search.
@@ -424,7 +452,10 @@ the dynamic programming pass, so only real candidates pay the expensive
 path. With thousands of sessions across three fields each, a keystroke stays
 in low tens of milliseconds.
 
-Per-group caps bound rendering work regardless of how many items match.
+Rendering work is bounded by the viewport, not by the result count. Only
+the active tab is flattened into rows, and only `viewport` of those rows
+are rendered, so a query matching every session costs the same to paint as
+one matching three.
 
 ## Verification
 

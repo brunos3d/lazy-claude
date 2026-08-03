@@ -17,7 +17,7 @@
 - `npm run build` must pass. `tsc` under `strict` is the only type check.
 - Never drop `node scripts/chmod-bin.mjs` from the build script.
 - Never decode an encoded project folder name back to a path. Match forward from a known path via `encodeProjectPath`, or join on `encoded`.
-- `ModalLine` computes its background padding from `text.length`, so every string rendered inside a modal must be single-width. Reuse only glyphs already present in `dialogs.tsx` (`…`, `│`, `─`, `↑`, `↓`, `>`, `❯`). No wide or ambiguous-width characters.
+- Modal rows compute their background padding from `text.length`, so every string rendered inside a modal must be single-width. Reuse only glyphs already present in `dialogs.tsx`: `…`, `│`, `─`, `↑`, `↓`, `>`. No wide or ambiguous-width characters, and no new Unicode ornaments. The palette's prompt is a plain `>`, the same one `InputDialog` uses; its visual distinction comes from the round border, the blue accent, the larger input row, and the layout.
 - Never call Ink's `useInput` directly. Use `useOverlayInput(id, ...)` inside overlays and `useAppInput(...)` in app components.
 - Comments explain why a constraint exists, not what the code does.
 - `src/core/` stays pure. `src/services/` holds all business logic and every read of Claude Code's on-disk format. `src/ui/` never parses session records or touches the filesystem.
@@ -1838,13 +1838,63 @@ git commit -m "feat(ui): add keybinding table and command palette jump navigatio
 - Consumes: `SearchEngine`, `SearchIndexer`, `SearchHistory`, `registerDefaultProviders`, `resolveRowOffset`, `Modal`/`ModalLine`/`blankLine`/`textLine`/`useModalWidth`, `useOverlayInput`, `highlighted` from `../highlight.js`.
 - Produces: `PaletteSpec { kind: 'palette'; onSelect: (target: JumpTarget) => void }` in the `OverlaySpec` union, and the `CommandPalette` component.
 
-- [ ] **Step 1: Let Modal take a border style**
+- [ ] **Step 1: Let Modal take a border style, and share its row padding**
 
-In `src/ui/overlay/Modal.tsx`, change the import line and the `Modal` signature:
+In `src/ui/overlay/Modal.tsx`, change the import line:
 
 ```ts
 import { Box, Text, type BoxProps } from 'ink';
 ```
+
+Export the opaque-row primitives so a row that cannot use `ModalLine`'s flat segments still paints itself identically. Replace the `const BACKGROUND = 'black';` line with:
+
+```ts
+/**
+ * The background every modal row paints, and the padding that carries it
+ * to the frame's edge.
+ *
+ * Box padding would leave transparent gaps and the interface behind would
+ * show through the dialog, so each row pads itself. Width is counted in
+ * characters, which is correct only while every glyph inside the frame is
+ * single-width.
+ *
+ * Exported because `CommandPalette` renders result rows as its own Text:
+ * a highlighted title is per-character markup, which ModalLine's flat
+ * segments cannot express. Sharing these two keeps the one thing that
+ * must not diverge, the opaque row, in a single place.
+ */
+export const ROW_BACKGROUND = 'black';
+
+export function rowPadding(width: number, used: number): string {
+  return ' '.repeat(Math.max(0, width - used));
+}
+```
+
+Then update `ModalLine` to use them:
+
+```tsx
+export function ModalLine({ segments, width }: { segments: Segment[]; width: number }) {
+  const used = segments.reduce((total, segment) => total + segment.text.length, 0);
+  return (
+    <Text backgroundColor={ROW_BACKGROUND} wrap="truncate">
+      {segments.map((segment, index) => (
+        <Text
+          key={index}
+          color={segment.color}
+          bold={segment.bold}
+          dimColor={segment.dim}
+          inverse={segment.inverse}
+        >
+          {segment.text}
+        </Text>
+      ))}
+      {rowPadding(width, used)}
+    </Text>
+  );
+}
+```
+
+Now change the `Modal` signature:
 
 ```tsx
 export function Modal({
@@ -1930,7 +1980,15 @@ import { SearchIndexer } from '../../services/search/SearchIndexer.js';
 import type { SearchGroup, SearchHit, WorkspaceIndex } from '../../services/search/types.js';
 import { fit, highlighted } from '../highlight.js';
 import { useTerminalSize } from '../useTerminalSize.js';
-import { Modal, ModalLine, blankLine, textLine, useModalWidth } from './Modal.js';
+import {
+  Modal,
+  ModalLine,
+  ROW_BACKGROUND,
+  blankLine,
+  rowPadding,
+  textLine,
+  useModalWidth,
+} from './Modal.js';
 import { useOverlayInput, type PaletteSpec } from './OverlayContext.js';
 import { resolveRowOffset } from './window.js';
 
@@ -1970,8 +2028,9 @@ const TITLE_COLOR: Record<SearchHit['kind'], string> = {
 /**
  * A result row. Written as a Text rather than a ModalLine because the title
  * carries per-character highlight markup, which ModalLine's flat segments
- * cannot express. The background colour and the width padding match
- * ModalLine exactly, so the row stays opaque like every other line.
+ * cannot express. It paints itself with ModalLine's own ROW_BACKGROUND and
+ * rowPadding, so the one property that must never diverge, an opaque row,
+ * has a single implementation.
  */
 function HitLine({
   hit,
@@ -1984,11 +2043,11 @@ function HitLine({
 }) {
   const meta = hit.meta ?? '';
   const metaColumn = meta ? Math.min(meta.length, Math.max(0, width - 14)) : 0;
-  const titleWidth = Math.max(8, width - 6 - (metaColumn ? metaColumn + 2 : 0));
-  const padding = Math.max(0, width - 4 - titleWidth - (metaColumn ? metaColumn + 2 : 0));
+  const metaUsed = metaColumn ? metaColumn + 2 : 0;
+  const titleWidth = Math.max(8, width - 6 - metaUsed);
 
   return (
-    <Text backgroundColor="black" wrap="truncate">
+    <Text backgroundColor={ROW_BACKGROUND} wrap="truncate">
       <Text color="green" bold>
         {selected ? '  > ' : '    '}
       </Text>
@@ -1996,7 +2055,7 @@ function HitLine({
         {highlighted('', hit.title, hit.highlights, titleWidth)}
       </Text>
       {metaColumn ? <Text dimColor>{`  ${fit(meta.slice(0, metaColumn), metaColumn)}`}</Text> : null}
-      {' '.repeat(padding)}
+      {rowPadding(width, 4 + titleWidth + metaUsed)}
     </Text>
   );
 }
@@ -2282,7 +2341,7 @@ export function CommandPalette({
         width={width}
         segments={[
           { text: '  ' },
-          { text: '❯ ', color: 'blue', bold: true },
+          { text: '> ', color: 'blue', bold: true },
           query
             ? { text: visibleQuery, bold: true }
             : { text: PLACEHOLDER.slice(0, Math.max(0, width - 6)), dim: true },
@@ -2526,8 +2585,15 @@ And change the sentence below it from "There is no test runner, linter, or forma
 ```
 There is no linter or formatter configured. Tests use Node's built-in
 runner with no dependencies: sources and `*.test.ts` files sit side by side
-under `src/`, and `npm test` compiles then runs `node --test dist`. Run it
-after changes; `tsc` under `strict` is still the type check.
+under `src/`, and `npm test` compiles then runs
+`node --test 'dist/**/*.test.js'`. Run it after changes; `tsc` under
+`strict` is still the type check.
+
+The quoted glob is deliberate. Node 22 stopped recursively scanning a bare
+directory passed to `--test`, so `node --test dist` now fails, and Node
+resolves the quoted pattern itself rather than the shell. Running the tests
+therefore needs Node 21 or newer, while the published CLI still supports
+the Node 18 floor in `engines`.
 
 Tests cover the pure layers only: ranking, the search engine, the workspace
 indexer, providers, jump planning, and overlay windowing. Ink components
@@ -2606,7 +2672,7 @@ git commit -m "docs: document the global search layer and command palette"
 
 **Known trade-offs recorded here rather than left implicit.**
 
-- Result rows use `HitLine`, a bespoke `Text`, rather than `ModalLine`. `ModalLine` takes flat segments and `highlighted` returns per-character markup, so segments cannot carry a highlighted title. `HitLine` reproduces `ModalLine`'s background and `.length`-based padding, and must keep doing so or rows will let the interface behind show through.
+- Result rows use `HitLine`, a bespoke `Text`, rather than `ModalLine`, because `ModalLine` takes flat segments and `highlighted` returns per-character markup. `ModalLine`'s public shape is deliberately unchanged: instead, `ROW_BACKGROUND` and `rowPadding` are exported from `Modal.tsx` and both rows use them, so the opaque-row behaviour has one implementation while each row type keeps its own content rendering.
 - During warm-up, sessions whose metadata has not been parsed yet fall back to their id as a title, so they match on id rather than title until phase 3 reaches them. The footer says `indexing n/total` while that is true.
 - `SearchHistory.list()` is read inside a `useMemo` that does not depend on it. This is safe only because history changes on select, which closes the palette. If a future change records history without closing, that memo needs the dependency.
 - Footer bindings are getting long. If `HelpBar` overflows at narrow widths, drop `['?', 'help']` from the sessions list before dropping the palette entry.

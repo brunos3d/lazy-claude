@@ -1,6 +1,7 @@
 import React from 'react';
 import { useOverlays } from './OverlayContext.js';
 import { ActionMenu, ConfirmDialog, InputDialog, OutputDialog, PickerDialog } from './dialogs.js';
+import { CommandPalette } from './CommandPalette.js';
 
 /**
  * Renders the overlay stack. Mount this as the LAST child of the root
@@ -30,6 +31,8 @@ export function OverlayHost() {
             return <OutputDialog key={overlay.id} overlay={overlay} onClose={onClose} />;
           case 'actions':
             return <ActionMenu key={overlay.id} overlay={overlay} onClose={onClose} />;
+          case 'palette':
+            return <CommandPalette key={overlay.id} overlay={overlay} onClose={onClose} />;
         }
       })}
     </>

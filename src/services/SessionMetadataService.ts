@@ -56,8 +56,27 @@ class SessionMetadataServiceImpl {
   /**
    * Metadata for many sessions. Uncached files are parsed with bounded
    * concurrency so a large project does not open hundreds of files at once.
+   *
+   * `onProgress` receives the live result map, not a copy, so a caller
+   * showing progress can render partial titles without paying an O(n) copy
+   * per batch. The map is complete once the returned promise resolves.
+   *
+   * `signal` stops the pass between batches. A whole-workspace pass keeps
+   * the Node event loop alive for seconds, which delays quitting the TUI
+   * long after the interface is gone; abandoning the caller is not enough,
+   * the cancellation has to reach this loop. An aborted pass still returns
+   * whatever it managed to read and still saves the cache, so the work
+   * done so far is not thrown away.
    */
-  async getMany(sessions: SessionEntry[]): Promise<Map<string, SessionMetadata>> {
+  async getMany(
+    sessions: SessionEntry[],
+    onProgress?: (progress: {
+      done: number;
+      total: number;
+      metadata: Map<string, SessionMetadata>;
+    }) => void,
+    signal?: AbortSignal,
+  ): Promise<Map<string, SessionMetadata>> {
     await this.cache.load();
     const result = new Map<string, SessionMetadata>();
     const pending: SessionEntry[] = [];
@@ -68,8 +87,11 @@ class SessionMetadataServiceImpl {
       else pending.push(session);
     }
 
+    onProgress?.({ done: result.size, total: sessions.length, metadata: result });
+
     const CONCURRENCY = 12;
     for (let i = 0; i < pending.length; i += CONCURRENCY) {
+      if (signal?.aborted) break;
       const batch = pending.slice(i, i + CONCURRENCY);
       const parsed = await Promise.all(
         batch.map(async (session) => [session, await this.parse(session)] as const),
@@ -78,6 +100,7 @@ class SessionMetadataServiceImpl {
         this.cache.set(session.file, session.sizeBytes, session.modifiedAt.getTime(), metadata);
         result.set(session.file, metadata);
       }
+      onProgress?.({ done: result.size, total: sessions.length, metadata: result });
     }
 
     await this.cache.save();

@@ -1,6 +1,6 @@
 {
   "name": "lazy-claude-tui",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "🦞 A LazyGit-style terminal UI for managing Claude Code sessions and project history.",
   "type": "module",
   "license": "MIT",
@@ -26,7 +26,8 @@
     "lzc": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.js"
   ],
   "engines": {
     "node": ">=18"
@@ -35,6 +36,7 @@
     "build": "tsc && node scripts/chmod-bin.mjs",
     "dev": "tsc --watch",
     "start": "node dist/cli.js",
+    "test": "tsc && node --test 'dist/**/*.test.js'",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },

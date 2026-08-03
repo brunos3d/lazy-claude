@@ -15,6 +15,7 @@ import {
   type ActionCategory,
   type ActionDefinition,
 } from '../actions/registry.js';
+import { resolveRowOffset } from './window.js';
 
 export type { ActionDefinition as Action } from '../actions/registry.js';
 
@@ -270,16 +271,17 @@ export function ActionMenu({ overlay, onClose }: { overlay: ActionsSpec & { id: 
   const tiny = terminalRows < 10;
   const chrome = tiny ? 4 : compact ? 6 : 8; // border, title, rules, footer, padding
   const viewport = Math.max(1, Math.min(rowList.length, terminalRows - chrome));
-  const maxScroll = Math.max(0, rowList.length - viewport);
 
   /** Clamp an offset so the selected action, and its header, stay visible. */
   const resolveOffset = (base: number, actionIndex: number) => {
     const row = rowOfAction[actionIndex] ?? 0;
-    let next = Math.min(Math.max(0, base), maxScroll);
-    if (row < next) next = row;
-    else if (row >= next + viewport) next = row - viewport + 1;
-    if (rowList[row - 1]?.kind === 'header' && row - 1 < next) next = row - 1;
-    return Math.max(0, Math.min(next, maxScroll));
+    return resolveRowOffset({
+      base,
+      row,
+      viewport,
+      rowCount: rowList.length,
+      headerAbove: rowList[row - 1]?.kind === 'header',
+    });
   };
 
   const select = (nextIndex: number) => {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, type BoxProps } from 'ink';
 import { useTerminalSize } from '../useTerminalSize.js';
 
 /**
@@ -20,20 +20,45 @@ export interface Segment {
   bold?: boolean;
   dim?: boolean;
   inverse?: boolean;
+  /**
+   * Overrides the row background for this segment only. Used for the
+   * palette's active tab, which is a filled chip inside an otherwise
+   * ordinary row. Omit it and the segment inherits ROW_BACKGROUND, which
+   * is what keeps the row opaque.
+   */
+  backgroundColor?: string;
 }
 
-const BACKGROUND = 'black';
+/**
+ * The background every modal row paints, and the padding that carries it
+ * to the frame's edge.
+ *
+ * Box padding would leave transparent gaps and the interface behind would
+ * show through the dialog, so each row pads itself. Width is counted in
+ * characters, which is correct only while every glyph inside the frame is
+ * single-width.
+ *
+ * Exported because `CommandPalette` renders result rows as its own Text:
+ * a highlighted title is per-character markup, which ModalLine's flat
+ * segments cannot express. Sharing these two keeps the one thing that
+ * must not diverge, the opaque row, in a single place.
+ */
+export const ROW_BACKGROUND = 'black';
+
+export function rowPadding(width: number, used: number): string {
+  return ' '.repeat(Math.max(0, width - used));
+}
 
 /** One opaque row of a modal, padded to the modal's interior width. */
 export function ModalLine({ segments, width }: { segments: Segment[]; width: number }) {
   const used = segments.reduce((total, segment) => total + segment.text.length, 0);
-  const padding = Math.max(0, width - used);
   return (
-    <Text backgroundColor={BACKGROUND} wrap="truncate">
+    <Text backgroundColor={ROW_BACKGROUND} wrap="truncate">
       {segments.map((segment, index) => (
         <Text
           key={index}
           color={segment.color}
+          backgroundColor={segment.backgroundColor}
           bold={segment.bold}
           dimColor={segment.dim}
           inverse={segment.inverse}
@@ -41,7 +66,7 @@ export function ModalLine({ segments, width }: { segments: Segment[]; width: num
           {segment.text}
         </Text>
       ))}
-      {' '.repeat(padding)}
+      {rowPadding(width, used)}
     </Text>
   );
 }
@@ -79,10 +104,13 @@ export function wrapText(text: string, width: number): string[] {
 
 export function Modal({
   borderColor = 'cyan',
+  borderStyle = 'double',
   width,
   children,
 }: {
   borderColor?: string;
+  /** The palette uses a different frame so it never reads as a dialog. */
+  borderStyle?: BoxProps['borderStyle'];
   /** Interior width in columns, excluding the border. */
   width: number;
   children: React.ReactNode;
@@ -96,7 +124,7 @@ export function Modal({
       alignItems="center"
       justifyContent="center"
     >
-      <Box flexDirection="column" borderStyle="double" borderColor={borderColor} width={width + 2}>
+      <Box flexDirection="column" borderStyle={borderStyle} borderColor={borderColor} width={width + 2}>
         {children}
       </Box>
     </Box>
