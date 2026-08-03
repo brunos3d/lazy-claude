@@ -1,3 +1,4 @@
+
 # Lazy Claude
 
 Find and resume Claude Code sessions from the terminal, and keep the project data behind them healthy. A keyboard-driven TUI in the spirit of LazyGit, plus a CLI that exposes the same operations for scripts.
@@ -5,6 +6,8 @@ Find and resume Claude Code sessions from the terminal, and keep the project dat
 Sessions pile up quickly. After a few weeks there are hundreds of them across dozens of projects, stored as UUID-named files, and Claude Code's own picker only lists the directory you are standing in. Lazy Claude reads the same metadata Claude Code writes, so every session shows its real title next to its branch, size, and age. Fuzzy search cuts hundreds down to a handful in three keystrokes, the inspector shows what a session actually did (messages, tool calls, files touched, a conversation preview, a timeline), and one key hands the terminal over to `claude --resume` in that project's directory.
 
 Moving a project breaks all of this, because Claude Code derives each storage path from the project's absolute path: a plain `mv` orphans every session that belonged to it. Lazy Claude owns that problem too. It moves projects with their history intact, including nested sub-projects and worktrees, repairs references after a move that already happened, archives and prunes what you no longer need, packs a project and its sessions into a portable archive, and backs up the history index before every change. It is native TypeScript throughout, with no shell-outs and no dependency on other tools.
+
+https://github.com/user-attachments/assets/1a9a7ca4-f129-4eeb-96b2-6297c67345ed
 
 ## Features
 
