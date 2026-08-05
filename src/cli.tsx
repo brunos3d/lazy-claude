@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { runCommand } from './cli/commands.js';
-import { LauncherService } from './services/LauncherService.js';
+import { LauncherService, type LaunchPlan } from './services/LauncherService.js';
 import { WorkspaceResolver } from './services/WorkspaceResolver.js';
 import { App } from './ui/App.js';
 
@@ -29,6 +29,7 @@ Usage:
   lazyclaude show <session-id>        Session stats, timeline and preview
   lazyclaude search <query>           Search sessions by title, id or path
   lazyclaude info [path] [--json]     Project details (defaults to cwd)
+  lazyclaude stats [--json]           Workspace storage and counts
   lazyclaude doctor                   Environment summary
   lazyclaude verify                   Health check
 
@@ -51,9 +52,11 @@ Options:
   -f, --force      Skip confirmation prompts
   -p, --parents    Create missing parent directories
   --no-backup      Skip the automatic history.jsonl backup
-  --json           JSON output (list, sessions, info)
+  --json           JSON output (list, sessions, info, stats)
 
 Environment:
+  LAZY_CLAUDE_NO_RETURN   Exit on handover instead of returning from Claude Code
+  LAZY_CLAUDE_CLAUDE_BIN  Path to the claude executable, when not on PATH
   LAZY_CLAUDE_CLAUDE_DIR  Override the Claude data directory
   CLAUDE_CONFIG_DIR       Respected when set (same variable Claude Code uses)
                           Default: ~/.claude`;
@@ -105,51 +108,100 @@ async function main() {
     return;
   }
 
-  // Switch to the alternate screen buffer for a fullscreen feel, and name
-  // the window while we own it. Both are entered and undone together: a
-  // leftover title outlives the process in every terminal that does not
-  // reset it itself, which is most of them.
-  //
-  // OSC 0 sets the window title. The bracketing CSI 22/23 push and pop the
-  // terminal's own title stack, so quitting restores whatever the shell had
-  // set rather than blanking it; terminals without the stack ignore both.
-  process.stdout.write('\u001B[?1049h');
-  process.stdout.write('\u001B[22;0t');
-  process.stdout.write(`\u001B]0;${APP_TITLE}\u0007`);
-  // Windows consoles take their title from the process rather than from an
-  // escape sequence. Elsewhere it is harmless and shows up in ps.
-  process.title = APP_TITLE;
-
-  let restored = false;
-  const restoreTerminal = () => {
-    if (restored) return;
-    restored = true;
+  /**
+   * Alternate screen and window title.
+   *
+   * Entered and left as a pair, because a leftover title outlives the
+   * process in every terminal that does not reset it itself, which is most
+   * of them. Both are re-entrant now: a resume leaves fullscreen to hand the
+   * terminal to Claude Code and enters it again on the way back, and the CSI
+   * 22/23 title stack has to be pushed and popped the same number of times
+   * or the shell's own title never comes back.
+   *
+   * OSC 0 sets the title. Terminals without the title stack ignore 22/23.
+   */
+  let fullscreen = false;
+  const enterFullscreen = () => {
+    if (fullscreen) return;
+    fullscreen = true;
+    process.stdout.write('\u001B[?1049h');
+    process.stdout.write('\u001B[22;0t');
+    process.stdout.write(`\u001B]0;${APP_TITLE}\u0007`);
+    // Windows consoles take their title from the process rather than from
+    // an escape sequence. Elsewhere it is harmless and shows up in ps.
+    process.title = APP_TITLE;
+  };
+  const leaveFullscreen = () => {
+    if (!fullscreen) return;
+    fullscreen = false;
     process.stdout.write('\u001B[23;0t');
     process.stdout.write('\u001B[?1049l');
   };
-  process.on('exit', restoreTerminal);
+  process.on('exit', leaveFullscreen);
 
-  const { waitUntilExit } = render(<App initialProject={initialProject} />, { exitOnCtrlC: true });
-  await waitUntilExit();
+  /**
+   * Resuming is a round trip, not an exit.
+   *
+   * Claude Code runs in place of the interface rather than underneath it, so
+   * this unmounts Ink, hands over the real terminal, and mounts again once
+   * the child exits. Ink is fully torn down at that point, which is what
+   * makes a second `render` safe: raw mode, the stdin listeners and the
+   * alternate screen belong to the terminal between iterations rather than
+   * to a suspended interface.
+   *
+   * Set LAZY_CLAUDE_NO_RETURN to keep the old behaviour and exit into
+   * whatever Claude Code leaves behind.
+   */
+  let target: LaunchPlan['target'] | undefined;
+  let status: string | undefined;
 
-  // Hand over to Claude Code when a session launch was requested. This runs
-  // after Ink unmounted and the alternate screen was restored, so the child
-  // inherits a clean terminal and Lazy Claude is fully out of the way.
-  const plan = LauncherService.takePending();
-  if (plan) {
-    restoreTerminal();
+  for (;;) {
+    enterFullscreen();
+    const { waitUntilExit } = render(
+      <App initialProject={initialProject} initialTarget={target} initialStatus={status} />,
+      { exitOnCtrlC: true },
+    );
+    await waitUntilExit();
+
+    const plan = LauncherService.takePending();
+    if (!plan) return;
+
+    // Ink has unmounted and the alternate screen is restored, so the child
+    // inherits a clean terminal and Lazy Claude is fully out of the way.
+    leaveFullscreen();
     console.log(`${plan.shell}\n`);
     const result = spawnSync(plan.command, plan.args, {
       stdio: 'inherit',
       cwd: plan.cwd,
       env: plan.env,
     });
+
+    // A spawn failure means Claude Code never ran, so there is nothing to
+    // come back from. It also leaves its message on the real screen, which
+    // re-entering the alternate screen would swallow.
     if (result.error) {
       console.error(`Failed to launch Claude Code: ${result.error.message}`);
       process.exitCode = 1;
       return;
     }
-    process.exitCode = result.status ?? 0;
+
+    if (process.env.LAZY_CLAUDE_NO_RETURN) {
+      process.exitCode = result.status ?? 0;
+      return;
+    }
+
+    // Land back on the session that was just being worked on. The path
+    // argument has done its job by now; honouring it again would drag the
+    // selection back to wherever the process started.
+    initialProject = undefined;
+    target = plan.target;
+    // A clean exit needs no announcement. A crash or a non-zero exit does,
+    // and the alternate screen is about to hide the child's own output.
+    status = result.status
+      ? `Claude Code exited with code ${result.status}`
+      : result.signal
+        ? `Claude Code was terminated by ${result.signal}`
+        : undefined;
   }
 }
 

@@ -2,7 +2,14 @@ import type { Project } from "../../services/DiscoveryService.js";
 import type { SessionEntry } from "../../services/SessionService.js";
 
 /**
- * The action registry.
+ * The contextual action registry, behind `x`.
+ *
+ * Everything here acts on the highlighted project or session: remove the
+ * selection and the entry has nothing to run against. Operations that would
+ * behave identically with nothing selected are workspace actions and live
+ * in `services/actions/` behind the command palette instead. That rule is
+ * mechanical on purpose, because without it both surfaces drift into
+ * listing everything the program can do.
  *
  * The menu is generated from the current selection rather than hardcoded,
  * so a new operation is one entry here and appears in the right context
@@ -52,13 +59,6 @@ export interface ActionHandlers {
   packProject: () => void;
   projectInfo: () => void;
   removeProject: () => void;
-  unpackArchive: () => void;
-  backupManager: () => void;
-  healthCheck: () => void;
-  pruneOrphans: () => void;
-  diagnostics: () => void;
-  rescan: () => void;
-  refreshMetadata: () => void;
 }
 
 /** Build the categories that apply to the current selection. */
@@ -99,6 +99,12 @@ export function buildActionCategories(
         run: handlers.restoreSession,
         disabled: !session.archived,
         disabledReason: "session is not archived",
+      },
+      {
+        key: "c",
+        label: "Check integrity",
+        description: "Validate every record in the session file",
+        run: handlers.checkIntegrity,
       },
     );
   }
@@ -154,60 +160,6 @@ export function buildActionCategories(
     });
   }
 
-  const maintenance: ActionDefinition[] = [];
-  if (session) {
-    maintenance.push({
-      key: "c",
-      label: "Check integrity",
-      description: "Validate every record in the session file",
-      run: handlers.checkIntegrity,
-    });
-  }
-  maintenance.push(
-    {
-      key: "B",
-      label: "Backup manager",
-      description: "Create, restore, or delete history backups",
-      run: handlers.backupManager,
-    },
-    {
-      key: "U",
-      label: "Unpack archive",
-      description: "Restore a .claudepack to a new location",
-      run: handlers.unpackArchive,
-    },
-    {
-      key: "V",
-      label: "Health check",
-      description: "Find broken references and orphaned data",
-      run: handlers.healthCheck,
-    },
-    {
-      key: "g",
-      label: "Run diagnostics",
-      description: "Environment summary and counts",
-      run: handlers.diagnostics,
-    },
-    {
-      key: "R",
-      label: "Rescan",
-      description: "Rediscover projects and sessions",
-      run: handlers.rescan,
-    },
-    {
-      key: "M",
-      label: "Refresh metadata",
-      description: "Clear the title cache and re-read sessions",
-      run: handlers.refreshMetadata,
-    },
-  );
-  categories.push({
-    id: "maintenance",
-    title: "Maintenance",
-    accent: "blue",
-    actions: maintenance,
-  });
-
   // Dangerous is always last and visually separated.
   const dangerous: ActionDefinition[] = [];
   if (session) {
@@ -230,13 +182,6 @@ export function buildActionCategories(
       danger: true,
     });
   }
-  dangerous.push({
-    key: "P",
-    label: "Prune orphans",
-    description: "Delete session folders with no project",
-    run: handlers.pruneOrphans,
-    danger: true,
-  });
   categories.push({
     id: "dangerous",
     title: "Dangerous",

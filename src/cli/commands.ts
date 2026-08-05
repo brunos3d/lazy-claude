@@ -16,6 +16,7 @@ import { MoveService } from '../services/MoveService.js';
 import { PackService } from '../services/PackService.js';
 import { ProjectService } from '../services/ProjectService.js';
 import { RepairService } from '../services/RepairService.js';
+import { StatsService } from '../services/StatsService.js';
 import {
   archiveSession,
   deleteSession,
@@ -203,6 +204,16 @@ const commands: Record<string, Command> = {
     console.log(
       `History entries: ${info.historyEntries.exact} (${info.historyEntries.nested} nested)`,
     );
+    return 0;
+  },
+
+  async stats({ flags }) {
+    const stats = await StatsService.collect();
+    if (flags.json) {
+      console.log(JSON.stringify(stats, null, 2));
+      return 0;
+    }
+    console.log(StatsService.format(stats));
     return 0;
   },
 

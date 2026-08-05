@@ -10,6 +10,16 @@ import { RepairService } from '../services/RepairService.js';
 import { PackService } from '../services/PackService.js';
 import { BackupService, type Backup } from '../services/BackupService.js';
 import { LABEL_FIELD, SearchService } from '../services/SearchService.js';
+import { StatsService } from '../services/StatsService.js';
+import {
+  DEFAULT_VIEW,
+  PROJECT_SORTS,
+  SESSION_SORTS,
+  ViewService,
+  type WorkspaceView,
+} from '../services/ViewService.js';
+import { ActionRegistry } from '../services/actions/ActionRegistry.js';
+import { registerDefaultActions } from '../services/actions/register.js';
 import { SessionMetadataService, type SessionMetadata } from '../services/SessionMetadataService.js';
 import { ConversationService, type Conversation } from '../services/ConversationService.js';
 import {
@@ -52,10 +62,12 @@ import { SearchIndexer } from '../services/search/SearchIndexer.js';
 import { registerDefaultProviders } from '../services/search/register.js';
 import { KEYS } from './keys.js';
 import { pendingKey, useJumpTarget, type JumpActions } from './useJumpTarget.js';
+import type { SelectTarget } from '../services/search/types.js';
 
 // Providers are process-wide, so registration happens once at load rather
 // than on every mount of the palette.
 registerDefaultProviders();
+registerDefaultActions();
 
 /**
  * Actions that keep a global shortcut. These act on the highlighted item
@@ -66,6 +78,14 @@ const QUICK_KEYS = new Set(['e', 'E', 'a', 'r', 'd', 'c']);
 export interface AppProps {
   /** Project to open directly, from `lazyclaude <path>`. */
   initialProject?: string;
+  /**
+   * Session to select on mount, set when coming back from Claude Code.
+   * Takes precedence over `initialProject`, which describes where the
+   * process started rather than where the user just was.
+   */
+  initialTarget?: { encoded: string; file: string };
+  /** Status line to show on mount, for how the previous resume ended. */
+  initialStatus?: string;
 }
 
 const HELP_TEXT = `Lazy Claude
@@ -81,9 +101,10 @@ Navigation
   ↑/k ↓/j        move within the focused panel
   tab            cycle Projects, Sessions, Details
   enter          focus the session list for the selected project
-  esc            step back up (Details to Sessions to Projects)
+  esc            clear the query, then the filter, then step back up
   /              search the focused list
-  ctrl+k         command palette: search every project and session
+  s              sort the focused list
+  ctrl+k         command palette: search and run workspace commands
   x              contextual action menu
 
 Details panel
@@ -91,17 +112,28 @@ Details panel
   J / K          scroll
 
 Command palette (ctrl+k)
-  Searches the whole workspace, not just the focused list. Results are
-  grouped into Projects and Sessions; enter jumps straight to one, which
-  selects its project, loads its sessions, and highlights it. Recent
-  searches appear when the input is empty. This is navigation only:
-  operations stay in the action palette (x).
+  Searches the whole workspace, not just the focused list, and runs
+  workspace commands. Results arrive as tabs: Projects, Sessions and
+  Actions, switched with tab and shift+tab. Enter jumps to a project or
+  session, or runs an action. With the input empty the tabs show recent
+  searches and every action, so commands can be found by browsing rather
+  than by remembering a shortcut.
+
+  Actions are global: sorting, filters, statistics, and the maintenance
+  operations that act on the whole workspace. Anything that acts on the
+  highlighted row is in the action menu (x) instead.
+
+Sorting and filtering
+  Sort with s, or from the palette. The active sort shows on the right of
+  each panel's search row and stays until something else is chosen.
+  Project filters (missing on disk, orphaned, empty) come from the
+  palette and name themselves in the panel title. esc clears them.
 
 Actions (x)
-  Every operation lives in the action palette, grouped into Session,
-  Project, Maintenance and Dangerous. It adapts to whichever panel has
-  focus, so there is no separate shortcut set for projects and sessions.
-  Inside it, enter runs the selection and a shortcut key runs directly.
+  Operations on the highlighted project or session, grouped into Session,
+  Project and Dangerous. It adapts to whichever panel has focus, so there
+  is no separate shortcut set for projects and sessions. Inside it, enter
+  runs the selection and a shortcut key runs directly.
 
 Quick shortcuts (these also work outside the palette)
   e              resume the session in Claude Code
@@ -111,6 +143,11 @@ Quick shortcuts (these also work outside the palette)
   d              delete session permanently
   c              check session file integrity
   t              toggle live / archived sessions
+
+Resuming
+  Claude Code takes over the terminal, and Lazy Claude takes it back when
+  Claude Code exits, landing on the session you were just in. Set
+  LAZY_CLAUDE_NO_RETURN to exit on handover instead of coming back.
 
 Titles come from the same metadata Claude Code's resume picker uses.
 Sessions whose title is dimmed had it inferred from the opening prompt.`;
@@ -135,7 +172,7 @@ export function App(props: AppProps) {
   );
 }
 
-function AppShell({ initialProject }: AppProps) {
+function AppShell({ initialProject, initialTarget, initialStatus }: AppProps) {
   const { exit } = useApp();
   const { open, idle } = useOverlays();
   const { columns, rows } = useTerminalSize();
@@ -158,8 +195,12 @@ function AppShell({ initialProject }: AppProps) {
   // One query per list, so switching focus never silently re-filters the other.
   const [projectQuery, setProjectQuery] = useState('');
   const [sessionQuery, setSessionQuery] = useState('');
+  // How the workspace is being looked at. The sidebar popup and the
+  // palette's sorting and filter actions both write here, and every list
+  // reads its order from it.
+  const [view, setView] = useState<WorkspaceView>(DEFAULT_VIEW);
   const [searching, setSearching] = useState(false);
-  const [status, setStatus] = useState<string | undefined>();
+  const [status, setStatus] = useState<string | undefined>(initialStatus);
   const [busy, setBusy] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [autoOpened, setAutoOpened] = useState(false);
@@ -176,7 +217,9 @@ function AppShell({ initialProject }: AppProps) {
     DiscoveryService.discoverProjects()
       .then((list) => {
         if (cancelled) return;
-        list.sort((a, b) => b.lastActivity - a.lastActivity);
+        // Ordering belongs to ViewService, which the rows go through. A
+        // sort here as well would be a second implementation, and the two
+        // would disagree the moment the user picked anything else.
         setProjects(list);
         // Reuse the discovery that just ran instead of scanning twice, and
         // build in the background so opening the palette never waits.
@@ -200,38 +243,53 @@ function AppShell({ initialProject }: AppProps) {
     };
   }, [refreshTick]);
 
-  const allProjectItems = useMemo<ProjectItem[]>(() => {
-    const items: ProjectItem[] = [{ kind: 'all' }];
-    for (const project of projects ?? []) items.push({ kind: 'project', project });
-    return items;
-  }, [projects]);
+  const sortedProjects = useMemo(
+    () => ViewService.sortProjects(projects ?? [], view.projectSort),
+    [projects, view.projectSort],
+  );
 
   /**
-   * Ranked project rows. Filtering runs on every keystroke, so the result
-   * is memoized on the list and the query only. The "All sessions" entry
-   * drops out while filtering: it is a scope switch, not a search hit.
+   * Sorted but neither filtered nor searched, and the list a jump plans
+   * against.
+   *
+   * `planJump` returns an index into this array while `projectIndex` reads
+   * the rendered rows, so the two only agree when nothing is narrowing the
+   * list. That is why a jump clears both queries and the filter: on the
+   * next render the rendered rows are exactly this array again. Sorting is
+   * safe to leave applied because `planJump` matches on `encoded`.
+   */
+  const allProjectItems = useMemo<ProjectItem[]>(() => {
+    const items: ProjectItem[] = [{ kind: 'all' }];
+    for (const project of sortedProjects) items.push({ kind: 'project', project });
+    return items;
+  }, [sortedProjects]);
+
+  /**
+   * Rendered project rows: filter, then either rank by query or keep the
+   * sort. A query replaces the sort rather than composing with it, because
+   * relevance ranking is itself an ordering and re-sorting would throw it
+   * away.
+   *
+   * The "All sessions" entry drops out whenever the list is narrowed: it is
+   * a scope switch, not a project, so it has no business in a set of
+   * results.
    */
   const projectRows = useMemo<Array<{ item: ProjectItem; highlights?: number[] }>>(() => {
-    if (!projectQuery.trim()) return allProjectItems.map((item) => ({ item }));
-    return SearchService.filterProjects(projects ?? [], projectQuery, home).map((result) => ({
+    const filtered = ViewService.filterProjects(sortedProjects, view.projectFilter);
+    if (!projectQuery.trim()) {
+      const items: ProjectItem[] =
+        view.projectFilter === 'none'
+          ? allProjectItems
+          : filtered.map((project) => ({ kind: 'project', project }));
+      return items.map((item) => ({ item }));
+    }
+    return SearchService.filterProjects(filtered, projectQuery, home).map((result) => ({
       item: { kind: 'project' as const, project: result.item },
       highlights: result.highlights[LABEL_FIELD],
     }));
-  }, [allProjectItems, projects, projectQuery, home]);
+  }, [allProjectItems, sortedProjects, view.projectFilter, projectQuery, home]);
 
   const projectItems = useMemo(() => projectRows.map((row) => row.item), [projectRows]);
-
-  // Open straight into a project when launched with a path.
-  useEffect(() => {
-    if (autoOpened || !initialProject || !projects) return;
-    setAutoOpened(true);
-    const index = allProjectItems.findIndex(
-      (item) => item.kind === 'project' && item.project.path === initialProject,
-    );
-    if (index < 0) return;
-    setProjectIndex(index);
-    setFocus('sessions');
-  }, [autoOpened, initialProject, projects, allProjectItems]);
 
   const selectedItem = projectItems[Math.min(projectIndex, projectItems.length - 1)] ?? null;
   const selectedProject = selectedItem?.kind === 'project' ? selectedItem.project : null;
@@ -291,13 +349,20 @@ function AppShell({ initialProject }: AppProps) {
     };
   }, [selectedItem, showArchived, refreshTick]);
 
+  /**
+   * Sorted session rows, then ranked when there is a query. Title sorting
+   * reorders once metadata arrives, which is the same moment the rows stop
+   * showing session ids, so what the user sees and what they asked for stay
+   * in agreement.
+   */
   const sessionRows = useMemo<Array<{ item: SessionEntry; highlights?: number[] }>>(() => {
-    if (!sessionQuery.trim()) return sessions.map((item) => ({ item }));
-    return SearchService.filterSessions(sessions, metadata, sessionQuery).map((result) => ({
+    const sorted = ViewService.sortSessions(sessions, metadata, view.sessionSort);
+    if (!sessionQuery.trim()) return sorted.map((item) => ({ item }));
+    return SearchService.filterSessions(sorted, metadata, sessionQuery).map((result) => ({
       item: result.item,
       highlights: result.highlights[LABEL_FIELD],
     }));
-  }, [sessions, metadata, sessionQuery]);
+  }, [sessions, metadata, sessionQuery, view.sessionSort]);
 
   const visibleSessions = useMemo(() => sessionRows.map((row) => row.item), [sessionRows]);
 
@@ -801,12 +866,130 @@ function AppShell({ initialProject }: AppProps) {
       .finally(() => setBusy(false));
   }, [refresh]);
 
+  /**
+   * Read from disk rather than from the search index. The index is built in
+   * the background and may still be filling, and a storage report that
+   * silently under-reports is worse than one that takes a moment.
+   */
+  const showStatistics = useCallback(() => {
+    setBusy(true);
+    StatsService.collect(home)
+      .then((stats) => showOverlay('Workspace statistics', StatsService.format(stats)))
+      .catch((error: Error) => showOverlay('Workspace statistics failed', error.message))
+      .finally(() => setBusy(false));
+  }, [home, showOverlay]);
+
+  const toggleArchived = useCallback(() => {
+    setShowArchived((value) => !value);
+    setSessionIndex(0);
+  }, []);
+
+  const healthCheck = useCallback(() => {
+    setBusy(true);
+    DiagnosticsService.healthCheck()
+      .then((report) => showOverlay('Health check', report.text))
+      .finally(() => setBusy(false));
+  }, [showOverlay]);
+
+  // ---- Workspace actions ----------------------------------------------
+
+  /**
+   * The global half of the two command surfaces, rebuilt whenever the view
+   * or a handler changes because each action's `active` flag and closure
+   * describe the state at the moment it was built. The palette gets a copy
+   * when it opens.
+   */
+  const workspaceActions = useMemo(
+    () =>
+      ActionRegistry.list({
+        view,
+        showArchived,
+        setView,
+        handlers: {
+          rescan: refresh,
+          refreshMetadata: rescanMetadata,
+          repairReferences: startRepair,
+          healthCheck,
+          diagnostics: runDiagnostics,
+          backupManager: startBackups,
+          unpackArchive: startUnpack,
+          pruneOrphans: startPrune,
+          statistics: showStatistics,
+          toggleArchived,
+        },
+      }),
+    [
+      view,
+      showArchived,
+      refresh,
+      rescanMetadata,
+      startRepair,
+      healthCheck,
+      runDiagnostics,
+      startBackups,
+      startUnpack,
+      startPrune,
+      showStatistics,
+      toggleArchived,
+    ],
+  );
+
+  const runWorkspaceAction = useCallback(
+    (id: string) => {
+      const action = workspaceActions.find((entry) => entry.id === id);
+      if (!action) {
+        setStatus('That action is no longer available.');
+        return;
+      }
+      action.run();
+    },
+    [workspaceActions],
+  );
+
+  /**
+   * Sort popup for whichever list has focus. It reuses the picker overlay
+   * rather than introducing a dialog kind, and its options come from the
+   * same tables the palette's sorting actions read.
+   */
+  const openSortPicker = useCallback(() => {
+    const onSessions = focus !== 'projects';
+    if (onSessions) {
+      const activeId = ViewService.sessionSortOption(view.sessionSort).id;
+      open({
+        kind: 'picker',
+        title: 'Sort sessions',
+        options: SESSION_SORTS.map(
+          (option) => `${option.label}${option.id === activeId ? '  · active' : ''}`,
+        ),
+        onResult: (value, index) => {
+          const chosen = SESSION_SORTS[index];
+          if (value === null || !chosen) return;
+          setView((current) => ({ ...current, sessionSort: chosen.sort }));
+        },
+      });
+      return;
+    }
+    const activeId = ViewService.projectSortOption(view.projectSort).id;
+    open({
+      kind: 'picker',
+      title: 'Sort projects',
+      options: PROJECT_SORTS.map(
+        (option) => `${option.label}${option.id === activeId ? '  · active' : ''}`,
+      ),
+      onResult: (value, index) => {
+        const chosen = PROJECT_SORTS[index];
+        if (value === null || !chosen) return;
+        setView((current) => ({ ...current, projectSort: chosen.sort }));
+      },
+    });
+  }, [focus, open, view.sessionSort, view.projectSort]);
+
   // ---- Contextual actions ---------------------------------------------
 
   /**
-   * Menu contents come from the registry, generated from whatever is
-   * selected right now, so Projects and Sessions get their own palette
-   * without separate shortcut sets.
+   * The contextual half of the two command surfaces. Everything here acts
+   * on the highlighted project or session; anything that would run the same
+   * way with nothing selected lives in the palette's Actions tab instead.
    */
   const categories = useMemo(
     () =>
@@ -826,18 +1009,6 @@ function AppShell({ initialProject }: AppProps) {
           packProject: () => selectedProject && startPack(selectedProject),
           projectInfo: () => selectedProject && showInfo(selectedProject),
           removeProject: () => selectedProject && startRemove(selectedProject),
-          unpackArchive: startUnpack,
-          backupManager: startBackups,
-          healthCheck: () => {
-            setBusy(true);
-            DiagnosticsService.healthCheck()
-              .then((report) => showOverlay('Health check', report.text))
-              .finally(() => setBusy(false));
-          },
-          pruneOrphans: startPrune,
-          diagnostics: runDiagnostics,
-          rescan: refresh,
-          refreshMetadata: rescanMetadata,
         },
       }),
     [
@@ -852,13 +1023,6 @@ function AppShell({ initialProject }: AppProps) {
       startPack,
       showInfo,
       startRemove,
-      startUnpack,
-      startBackups,
-      startPrune,
-      runDiagnostics,
-      refresh,
-      rescanMetadata,
-      showOverlay,
     ],
   );
 
@@ -876,6 +1040,10 @@ function AppShell({ initialProject }: AppProps) {
       setDetailTab,
       setDetailScroll,
       setStatus,
+      // Without this the planned index would point into the full project
+      // list while the rows are still filtered, and a jump to a project the
+      // filter hides could not resolve at all.
+      clearProjectFilter: () => setView((current) => ({ ...current, projectFilter: 'none' })),
     }),
     [],
   );
@@ -889,9 +1057,46 @@ function AppShell({ initialProject }: AppProps) {
     actions: jumpActions,
   });
 
+  /**
+   * Where to land on mount.
+   *
+   * A resume round trip wins over the path argument: the target is where the
+   * user just was, while the argument only says where the process started.
+   * It goes through the jump machinery rather than setting indexes directly,
+   * so the asynchronous session load, the archived list and the "no longer
+   * available" case are all handled already.
+   */
+  useEffect(() => {
+    if (autoOpened || !projects) return;
+    setAutoOpened(true);
+    if (initialTarget) {
+      jumpTo({ kind: 'session', ...initialTarget, archived: false });
+      return;
+    }
+    if (!initialProject) return;
+    const index = allProjectItems.findIndex(
+      (item) => item.kind === 'project' && item.project.path === initialProject,
+    );
+    if (index < 0) return;
+    setProjectIndex(index);
+    setFocus('sessions');
+  }, [autoOpened, initialProject, initialTarget, projects, allProjectItems, jumpTo]);
+
+  /** The palette selects; deciding what a selection means happens here. */
+  const handleSelect = useCallback(
+    (target: SelectTarget) => {
+      if (target.kind === 'action') {
+        runWorkspaceAction(target.id);
+        return;
+      }
+      jumpTo(target);
+    },
+    [jumpTo, runWorkspaceAction],
+  );
+
   const openPalette = useCallback(
-    () => open({ kind: 'palette', onSelect: jumpTo }),
-    [open, jumpTo],
+    () => open({ kind: 'palette', actions: workspaceActions, onSelect: handleSelect }),
+    [open, handleSelect, workspaceActions],
   );
 
   // ---- Keyboard --------------------------------------------------------
@@ -965,6 +1170,10 @@ function AppShell({ initialProject }: AppProps) {
         setSearching(true);
         return;
       }
+      if (input === 's') {
+        openSortPicker();
+        return;
+      }
       if (input === 'R') {
         setStatus('Refreshing…');
         refresh();
@@ -1017,7 +1226,9 @@ function AppShell({ initialProject }: AppProps) {
       }
 
       if (key.escape) {
-        // Clear an active filter first, then step back up the hierarchy.
+        // Undo whatever is narrowing the view before moving anywhere: the
+        // query first, then the project filter. State that survives an
+        // escape is how a filtered list starts looking like a bug.
         const query = focus === 'projects' ? projectQuery : sessionQuery;
         if (focus !== 'details' && query) {
           if (focus === 'projects') {
@@ -1027,6 +1238,11 @@ function AppShell({ initialProject }: AppProps) {
             setSessionQuery('');
             setSessionIndex(0);
           }
+          return;
+        }
+        if (focus === 'projects' && view.projectFilter !== 'none') {
+          setView((current) => ({ ...current, projectFilter: 'none' }));
+          setProjectIndex(0);
           return;
         }
         setFocus((f) => (f === 'details' ? 'sessions' : 'projects'));
@@ -1090,6 +1306,13 @@ function AppShell({ initialProject }: AppProps) {
     ? shortenPath(selectedProject.orphaned ? selectedProject.encoded : selectedProject.path, home)
     : 'all projects';
 
+  // An active filter is named in the panel title, so a narrowed list can
+  // never look like a workspace that lost its projects.
+  const activeFilter = ViewService.filterOption(view.projectFilter);
+  const projectsTitle = activeFilter
+    ? `Projects (${projectRows.length} of ${(projects ?? []).length} · ${activeFilter.badge})`
+    : `Projects (${(projects ?? []).length})`;
+
   // The inspector header is a real tab bar now, so the panel title names
   // what is being inspected instead of doubling as navigation.
   const detailTitle = showSessionDetail
@@ -1104,9 +1327,9 @@ function AppShell({ initialProject }: AppProps) {
       ? [
           ['↑↓', 'projects'],
           ['enter', 'sessions'],
-          ['tab', 'panel'],
           ['/', 'search'],
-          [KEYS.commandPalette.label, 'go to'],
+          ['s', 'sort'],
+          [KEYS.commandPalette.label, 'commands'],
           ['x', 'actions'],
           ['?', 'help'],
           ['q', 'quit'],
@@ -1116,9 +1339,9 @@ function AppShell({ initialProject }: AppProps) {
             ['↑↓', 'sessions'],
             ['e', 'resume'],
             ['enter', 'details'],
-            ['esc', 'back'],
             ['/', 'search'],
-            [KEYS.commandPalette.label, 'go to'],
+            ['s', 'sort'],
+            [KEYS.commandPalette.label, 'commands'],
             ['x', 'actions'],
             ['?', 'help'],
             ['q', 'quit'],
@@ -1127,7 +1350,7 @@ function AppShell({ initialProject }: AppProps) {
             ['↑↓', 'scroll'],
             ['tab', 'next tab'],
             ['1-4', 'tab'],
-            [KEYS.commandPalette.label, 'go to'],
+            [KEYS.commandPalette.label, 'commands'],
             ['esc', 'sessions'],
             ['x', 'actions'],
             ['?', 'help'],
@@ -1143,18 +1366,17 @@ function AppShell({ initialProject }: AppProps) {
       <Box height={mainHeight}>
         {/* Left column: projects on top, that project's sessions below. */}
         <Box flexDirection="column" width={leftWidth} flexShrink={0}>
-          <Panel
-            title={`Projects (${(projects ?? []).length})`}
-            focused={focus === 'projects'}
-            height={projectsHeight}
-          >
+          <Panel title={projectsTitle} focused={focus === 'projects'} height={projectsHeight}>
             <SearchRow
               active={searching && focus === 'projects'}
               query={projectQuery}
               placeholder="Search projects (/)"
-              matches={projectItems.length}
+              // The "All sessions" row is a scope switch, not a project, so
+              // counting it would put the tally above the total.
+              matches={projectItems.filter((item) => item.kind === 'project').length}
               total={(projects ?? []).length}
               width={rowWidth}
+              sort={ViewService.projectSortOption(view.projectSort).badge}
             />
             {loadError && projects === null ? (
               <Box paddingX={1}>
@@ -1209,6 +1431,7 @@ function AppShell({ initialProject }: AppProps) {
               matches={visibleSessions.length}
               total={sessions.length}
               width={rowWidth}
+              sort={ViewService.sessionSortOption(view.sessionSort).badge}
             />
             {sessionsLoading ? (
               <Box paddingX={1}>

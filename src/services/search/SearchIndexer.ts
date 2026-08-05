@@ -3,6 +3,7 @@ import { shortenPath } from '../../core/format.js';
 import { DiscoveryService, type Project } from '../DiscoveryService.js';
 import { SessionMetadataService } from '../SessionMetadataService.js';
 import { listAllArchivedSessions, listAllSessions } from '../SessionService.js';
+import { ViewService } from '../ViewService.js';
 import type { WorkspaceIndex } from './types.js';
 
 type Listener = (index: WorkspaceIndex) => void;
@@ -105,7 +106,15 @@ class SearchIndexerImpl {
     seed?: Project[],
   ): Promise<void> {
     const home = os.homedir();
-    const projects = seed ?? (await DiscoveryService.discoverProjects());
+    // Recency order matters even though nothing displays this list directly:
+    // FilterService keeps caller order inside a match tier, so this is what
+    // breaks ties between two equally good project hits in the palette. The
+    // sidebar's own order is the user's and lives in WorkspaceView, so the
+    // index cannot inherit it and has to state its own.
+    const projects = ViewService.sortProjects(seed ?? (await DiscoveryService.discoverProjects()), {
+      field: 'activity',
+      direction: 'desc',
+    });
     if (generation !== this.generation) return;
 
     const projectLabels = new Map<string, string>();

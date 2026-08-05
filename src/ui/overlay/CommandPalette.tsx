@@ -3,7 +3,7 @@ import { Text } from 'ink';
 import { SearchEngine } from '../../services/search/SearchEngine.js';
 import { SearchHistory } from '../../services/search/SearchHistory.js';
 import { SearchIndexer } from '../../services/search/SearchIndexer.js';
-import type { SearchGroup, SearchHit, WorkspaceIndex } from '../../services/search/types.js';
+import type { ResultKind, SearchHit, WorkspaceIndex } from '../../services/search/types.js';
 import { fit, highlighted } from '../highlight.js';
 import { useTerminalSize } from '../useTerminalSize.js';
 import {
@@ -22,7 +22,12 @@ import { resolveRowOffset } from './window.js';
 /**
  * Global command palette.
  *
- * A "go to" system, not an action launcher: everything here navigates.
+ * Two things live here: navigation, which selects a project or session, and
+ * workspace actions, which change what the interface is doing. Neither is
+ * executed by the palette. It reports what was chosen through `onSelect`
+ * and App decides what that means, which is what keeps this component free
+ * of every operation's semantics.
+ *
  * Results come from the in-memory workspace index, so opening this never
  * starts a scan and never waits for one. A build still in flight simply
  * means fewer results for a moment.
@@ -32,6 +37,11 @@ import { resolveRowOffset } from './window.js';
  * rendering all groups at once forced a per-group cap, and anything past
  * the cap could not be scrolled to because navigation ran on into the next
  * group instead of into the remainder.
+ *
+ * Recent searches are a tab like any other rather than a separate empty
+ * state. That is what puts the Actions tab on screen before anything is
+ * typed: an action nobody can see until they guess a matching word is not
+ * discoverable, and discovery is the reason the tab exists.
  *
  * Only single-width characters appear inside the frame. Modal rows pad
  * their opaque background using text.length, so a wide glyph would leave
@@ -47,8 +57,20 @@ type PaletteRow =
   | { kind: 'recent'; query: string; pick: number }
   | { kind: 'note'; text: string; dim?: boolean };
 
-/** What enter does. Recent entries refine the query; hits navigate. */
+/** What enter does. Recent entries refine the query; hits are selected. */
 type Selection = { kind: 'hit'; hit: SearchHit } | { kind: 'recent'; query: string };
+
+/**
+ * One tab. Recent is not a ResultKind, because recent searches are a
+ * palette affordance rather than something the search layer knows about.
+ */
+type PaletteGroup =
+  | { key: 'recent'; title: string; entries: string[] }
+  | { key: ResultKind; title: string; hits: SearchHit[] };
+
+function groupCount(group: PaletteGroup): number {
+  return 'hits' in group ? group.hits.length : group.entries.length;
+}
 
 /** Cursor and scroll offset, kept per tab so switching back restores both. */
 interface TabState {
@@ -58,14 +80,15 @@ interface TabState {
 
 const ORIGIN: TabState = { index: 0, scroll: 0 };
 
-/** State key for the no-query view, which has results but no tab bar. */
-const RECENT_KEY = 'recent';
+/** State key used when there is no tab at all. */
+const EMPTY_KEY = 'empty';
 
-const PLACEHOLDER = 'Search projects, sessions, messages…';
-const TITLE_COLOR: Record<SearchHit['kind'], string> = {
+const PLACEHOLDER = 'Search projects, sessions and actions…';
+const TITLE_COLOR: Record<ResultKind, string> = {
   project: 'blue',
   session: 'cyan',
   message: 'magenta',
+  action: 'yellow',
 };
 
 /**
@@ -88,13 +111,14 @@ function HitLine({
   const metaColumn = meta ? Math.min(meta.length, Math.max(0, width - 14)) : 0;
   const metaUsed = metaColumn ? metaColumn + 2 : 0;
   const titleWidth = Math.max(8, width - 6 - metaUsed);
+  const color = selected ? 'green' : hit.danger ? 'red' : TITLE_COLOR[hit.kind];
 
   return (
     <Text backgroundColor={ROW_BACKGROUND} wrap="truncate">
       <Text color="green" bold>
         {selected ? '  > ' : '    '}
       </Text>
-      <Text color={selected ? 'green' : TITLE_COLOR[hit.kind]} bold={selected}>
+      <Text color={color} bold={selected}>
         {highlighted('', hit.title, hit.highlights, titleWidth)}
       </Text>
       {metaColumn ? <Text dimColor>{`  ${fit(meta.slice(0, metaColumn), metaColumn)}`}</Text> : null}
@@ -111,12 +135,12 @@ function HitLine({
  * because its panel is not a text field; here every printable character
  * has to reach the query, so tabs are reachable by tab/shift+tab only.
  */
-function tabSegments(groups: SearchGroup[], activeIndex: number, width: number): Segment[] {
+function tabSegments(groups: PaletteGroup[], activeIndex: number, width: number): Segment[] {
   const segments: Segment[] = [{ text: '  ' }];
   let used = 2;
 
   groups.forEach((group, i) => {
-    const label = ` ${group.title} (${group.hits.length}) `;
+    const label = ` ${group.title} (${groupCount(group)}) `;
     const gap = i > 0 ? 1 : 0;
     // Drop whole tabs rather than render a half one: a clipped chip reads
     // as a rendering fault, while a missing one is merely off-screen.
@@ -142,43 +166,78 @@ export function CommandPalette({
 }) {
   const { columns, rows: terminalRows } = useTerminalSize();
   const [query, setQuery] = useState('');
-  const [groups, setGroups] = useState<SearchGroup[]>([]);
-  const [activeKind, setActiveKind] = useState<string | null>(null);
+  const [hitGroups, setHitGroups] = useState<Array<{ kind: ResultKind; title: string; hits: SearchHit[] }>>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [tabState, setTabState] = useState<Record<string, TabState>>({});
   const [snapshot, setSnapshot] = useState<WorkspaceIndex>(() => SearchIndexer.snapshot());
 
   // Re-render as the background build publishes more of the workspace.
   useEffect(() => SearchIndexer.subscribe(setSnapshot), []);
 
+  // Runs on an empty query too. The engine answers that with its browsable
+  // providers only, which is how the Actions tab is on screen from the
+  // moment the palette opens without every project loading into a tab.
   useEffect(() => {
-    if (!query.trim()) {
-      setGroups([]);
-      return;
-    }
     let cancelled = false;
-    SearchEngine.search(query, snapshot)
+    SearchEngine.search(query, snapshot, overlay.actions)
       .then((result) => {
-        if (!cancelled) setGroups(result);
+        if (!cancelled) setHitGroups(result);
       })
       .catch(() => {
-        if (!cancelled) setGroups([]);
+        if (!cancelled) setHitGroups([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [query, snapshot]);
+  }, [query, snapshot, overlay.actions]);
+
+  const groups = useMemo<PaletteGroup[]>(() => {
+    const list: PaletteGroup[] = [];
+    // History only changes on select, which closes the palette, so reading
+    // it during render is enough.
+    const recent = query.trim() ? [] : SearchHistory.list();
+    if (recent.length > 0) list.push({ key: 'recent', title: 'Recent', entries: recent });
+    for (const group of hitGroups) list.push({ key: group.kind, title: group.title, hits: group.hits });
+    return list;
+  }, [query, hitGroups]);
+
+  /**
+   * Which tab enter would act on, when the user has not picked one.
+   *
+   * Not the first tab. Tab order is fixed so a kind of result is always in
+   * the same place, but fuzzy subsequence matching means a long project
+   * path matches almost any word, so "repair" would otherwise open on a
+   * project that merely contains those letters in order. Every provider
+   * scores through FilterService, whose tiers dominate the score, so the
+   * highest scoring group is the one that matched most directly.
+   */
+  const bestIndex = useMemo(() => {
+    if (!query.trim()) return 0;
+    let best = 0;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    groups.forEach((group, i) => {
+      if (!('hits' in group)) return;
+      // Providers return their hits already ranked, so the first is the best.
+      const top = group.hits[0]?.score ?? Number.NEGATIVE_INFINITY;
+      if (top > bestScore) {
+        bestScore = top;
+        best = i;
+      }
+    });
+    return best;
+  }, [groups, query]);
 
   // The active tab is derived, never stored as an index. SearchEngine drops
-  // empty groups, so falling back to the first group is exactly the "never
-  // land on an empty tab" rule: if the category the user was on stops
-  // matching, they land on one that still has results rather than on
-  // nothing. Deriving it also means no effect can leave the two out of sync.
-  const activeIndex = Math.max(
-    0,
-    groups.findIndex((group) => group.kind === activeKind),
-  );
-  const activeGroup: SearchGroup | null = groups[activeIndex] ?? null;
-  const stateKey = activeGroup?.kind ?? RECENT_KEY;
+  // empty groups, so falling back is exactly the "never land on an empty
+  // tab" rule: if the category the user was on stops matching, they land on
+  // one that still has results rather than on nothing. Deriving it also
+  // means no effect can leave the two out of sync. With no query the
+  // fallback is the first group, which is Recent when there is history and
+  // Actions otherwise.
+  const chosenIndex = groups.findIndex((group) => group.key === activeKey);
+  const activeIndex = chosenIndex >= 0 ? chosenIndex : bestIndex;
+  const activeGroup: PaletteGroup | null = groups[activeIndex] ?? null;
+  const stateKey = activeGroup?.key ?? EMPTY_KEY;
 
   // Width follows the terminal but stays inside a readable band.
   const width = useModalWidth(Math.max(40, Math.min(100, Math.round(columns * 0.7))));
@@ -194,30 +253,15 @@ export function CommandPalette({
   const { rowList, picks } = useMemo(() => {
     const list: PaletteRow[] = [];
     const selections: Selection[] = [];
-    const trimmed = query.trim();
-
-    if (!trimmed) {
-      // History only changes on select, which closes the palette, so
-      // reading it once per query state is enough.
-      const recent = SearchHistory.list();
-      if (recent.length === 0) {
-        list.push({
-          kind: 'note',
-          text: 'Type to search every project and session in the workspace.',
-          dim: true,
-        });
-      } else {
-        list.push({ kind: 'header', title: 'Recent' });
-        for (const entry of recent) {
-          selections.push({ kind: 'recent', query: entry });
-          list.push({ kind: 'recent', query: entry, pick: selections.length - 1 });
-        }
-      }
-      return { rowList: list, picks: selections };
-    }
 
     if (!activeGroup) {
-      list.push({ kind: 'note', text: 'No matching projects or sessions.' });
+      list.push({
+        kind: 'note',
+        text: query.trim()
+          ? 'No matching projects, sessions or actions.'
+          : 'Type to search every project and session in the workspace.',
+        dim: !query.trim(),
+      });
       list.push({ kind: 'spacer' });
       list.push({ kind: 'note', text: 'Press esc to close.', dim: true });
       if (snapshot.status !== 'ready' && snapshot.total > 0) {
@@ -230,10 +274,23 @@ export function CommandPalette({
       return { rowList: list, picks: selections };
     }
 
+    if ('entries' in activeGroup) {
+      for (const entry of activeGroup.entries) {
+        selections.push({ kind: 'recent', query: entry });
+        list.push({ kind: 'recent', query: entry, pick: selections.length - 1 });
+      }
+      return { rowList: list, picks: selections };
+    }
+
     // Only the active category is rendered, and all of it: the tab owns the
     // whole result area, so the viewport is the only limit on what can be
     // scrolled to.
+    let section: string | undefined;
     for (const hit of activeGroup.hits) {
+      if (hit.section && hit.section !== section) {
+        section = hit.section;
+        list.push({ kind: 'header', title: hit.section });
+      }
       selections.push({ kind: 'hit', hit });
       list.push({ kind: 'hit', hit, pick: selections.length - 1 });
       if (twoLine && hit.subtitle) list.push({ kind: 'hitSub', hit });
@@ -310,7 +367,7 @@ export function CommandPalette({
   const switchTab = (delta: number) => {
     if (groups.length < 2) return;
     const next = (activeIndex + delta + groups.length) % groups.length;
-    setActiveKind(groups[next].kind);
+    setActiveKey(groups[next].key);
   };
 
   useOverlayInput(overlay.id, (input, key) => {
@@ -350,8 +407,11 @@ export function CommandPalette({
         retype(choice.query);
         return;
       }
-      // Only a query that produced a jump is worth remembering.
-      SearchHistory.record(query);
+      // Only a query that produced a selection is worth remembering, and
+      // only a typed one: browsing to an action recorded an empty query.
+      if (query.trim()) SearchHistory.record(query);
+      // Close first. Several actions open their own dialog, and running
+      // before closing would leave the palette sitting under it.
       onClose();
       overlay.onSelect(choice.hit.target);
       return;
@@ -430,11 +490,19 @@ export function CommandPalette({
   const separator = '  ·  ';
   const trailing = [indexing, counter].filter(Boolean).join(separator);
   const room = Math.max(0, width - 4 - (trailing ? trailing.length + separator.length : 0));
+  // What enter does depends on the tab, so the footer has to say which.
+  const verb = !activeGroup
+    ? 'jumps'
+    : 'entries' in activeGroup
+      ? 'searches again'
+      : activeGroup.key === 'action'
+        ? 'runs'
+        : 'jumps';
   const long =
     groups.length > 1
-      ? 'enter jumps, tab switches category, esc closes'
-      : 'enter jumps to the result, esc closes';
-  const short = groups.length > 1 ? 'enter jump, tab category' : 'enter jump, esc close';
+      ? `enter ${verb}, tab switches category, esc closes`
+      : `enter ${verb}, esc closes`;
+  const short = groups.length > 1 ? `enter ${verb}, tab category` : `enter ${verb}`;
   const hint = long.length <= room ? long : short.length <= room ? short : '';
   const footer = hint && trailing ? `${hint}${separator}${trailing}` : hint || trailing;
 

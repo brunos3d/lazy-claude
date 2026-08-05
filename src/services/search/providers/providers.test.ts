@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import type { Project } from '../../DiscoveryService.js';
 import type { SessionEntry } from '../../SessionService.js';
 import type { SessionMetadata } from '../../SessionMetadataService.js';
+import type { WorkspaceAction } from '../../actions/types.js';
 import type { SearchContext, WorkspaceIndex } from '../types.js';
+import { ActionProvider } from './ActionProvider.js';
 import { ConversationProvider } from './ConversationProvider.js';
 import { ProjectProvider } from './ProjectProvider.js';
 import { SessionProvider } from './SessionProvider.js';
@@ -58,8 +60,9 @@ function makeIndex(): WorkspaceIndex {
   };
 }
 
-const context = (index: WorkspaceIndex): SearchContext => ({
+const context = (index: WorkspaceIndex, actions: WorkspaceAction[] = []): SearchContext => ({
   index,
+  actions,
   signal: new AbortController().signal,
 });
 
@@ -126,4 +129,70 @@ test('ConversationProvider is registered but disabled and returns nothing', asyn
   assert.equal(ConversationProvider.title, 'Messages');
   assert.equal(ConversationProvider.enabled(context(index)), false);
   assert.deepEqual(await ConversationProvider.search('anything', context(index)), []);
+});
+
+const action = (
+  id: string,
+  title: string,
+  extras: Partial<WorkspaceAction> = {},
+): WorkspaceAction => ({
+  id,
+  title,
+  category: 'sort',
+  run: () => {},
+  ...extras,
+});
+
+const ACTIONS: WorkspaceAction[] = [
+  action('sort.sessions.largest', 'Sort sessions by largest size', {
+    keywords: ['size', 'biggest'],
+    subtitle: 'Sessions list order',
+  }),
+  action('filter.archived', 'Show archived sessions', {
+    category: 'filter',
+    active: true,
+  }),
+  action('workspace.prune', 'Prune orphaned folders', {
+    category: 'workspace',
+    danger: true,
+    keywords: ['cleanup'],
+  }),
+];
+
+test('ActionProvider is browsable, so its tab exists before anything is typed', async () => {
+  const index = makeIndex();
+  assert.equal(ActionProvider.browsable, true);
+  assert.equal(ActionProvider.enabled(context(index, ACTIONS)), true);
+  assert.equal(ActionProvider.enabled(context(index, [])), false);
+
+  const hits = await ActionProvider.search('', context(index, ACTIONS));
+  assert.deepEqual(hits.map((hit) => hit.title), ACTIONS.map((entry) => entry.title));
+});
+
+test('ActionProvider carries state and danger through to the row', async () => {
+  const hits = await ActionProvider.search('', context(makeIndex(), ACTIONS));
+  assert.equal(hits[1].meta, 'active');
+  assert.equal(hits[0].meta, undefined);
+  assert.equal(hits[2].danger, true);
+  assert.deepEqual(hits[2].target, { kind: 'action', id: 'workspace.prune' });
+});
+
+test('ActionProvider sections the browse view and drops headers once ranked', async () => {
+  const index = makeIndex();
+  const browsed = await ActionProvider.search('', context(index, ACTIONS));
+  assert.deepEqual(browsed.map((hit) => hit.section), ['Sorting', 'Filters', 'Workspace']);
+
+  // Ranking reshuffles the rows, so a category could otherwise appear twice.
+  const ranked = await ActionProvider.search('s', context(index, ACTIONS));
+  assert.ok(ranked.every((hit) => hit.section === undefined));
+});
+
+test('keywords find an action whose title does not contain the query', async () => {
+  const hits = await ActionProvider.search('cleanup', context(makeIndex(), ACTIONS));
+  assert.deepEqual(hits.map((hit) => hit.id), ['action:workspace.prune']);
+});
+
+test('a title match outranks a keyword match', async () => {
+  const hits = await ActionProvider.search('archived', context(makeIndex(), ACTIONS));
+  assert.equal(hits[0].title, 'Show archived sessions');
 });

@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { shortenPath } from '../core/format.js';
 import { FilterService, type SearchDocument, type SearchResult } from './FilterService.js';
+import type { WorkspaceAction } from './actions/types.js';
 import type { Project } from './DiscoveryService.js';
 import type { SessionMetadata } from './SessionMetadataService.js';
 import type { SessionEntry } from './SessionService.js';
@@ -55,6 +56,26 @@ export function sessionDocument(
   };
 }
 
+/**
+ * Actions match on what they are called and on words that describe them.
+ *
+ * Keywords are the whole point: a user looking for "largest" should find
+ * "Sort sessions by largest size" without knowing the command's name, and
+ * one looking for "broken" should find the repair entry. They are joined
+ * into a single field because their match positions would not line up with
+ * any rendered text, so they are scored but never highlighted.
+ */
+export function actionDocument(action: WorkspaceAction): SearchDocument<WorkspaceAction> {
+  return {
+    item: action,
+    fields: [
+      { key: LABEL_FIELD, value: action.title, weight: 1, highlight: true },
+      { key: 'subtitle', value: action.subtitle ?? '', weight: 0.5 },
+      { key: 'keywords', value: (action.keywords ?? []).join(' '), weight: 0.4 },
+    ],
+  };
+}
+
 class SearchServiceImpl {
   filterProjects(projects: Project[], query: string, home = os.homedir()): Array<SearchResult<Project>> {
     return FilterService.filter(
@@ -72,6 +93,15 @@ class SearchServiceImpl {
       sessions.map((session) => sessionDocument(session, metadata.get(session.file))),
       query,
     );
+  }
+
+  /**
+   * An empty query returns every action in the order the registry built
+   * them, which is what makes the palette's Actions tab browsable without
+   * a second code path.
+   */
+  filterActions(actions: WorkspaceAction[], query: string): Array<SearchResult<WorkspaceAction>> {
+    return FilterService.filter(actions.map(actionDocument), query);
   }
 
   /** Single-session predicate, used by the CLI search command. */

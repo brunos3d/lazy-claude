@@ -1,3 +1,4 @@
+import type { WorkspaceAction } from '../actions/types.js';
 import type { Project } from '../DiscoveryService.js';
 import type { SessionEntry } from '../SessionService.js';
 import type { SessionMetadata } from '../SessionMetadataService.js';
@@ -8,7 +9,7 @@ import type { SessionMetadata } from '../SessionMetadataService.js';
  * of this layer, not its owner.
  */
 
-export type ResultKind = 'project' | 'session' | 'message';
+export type ResultKind = 'project' | 'session' | 'message' | 'action';
 
 /**
  * Where selecting a result lands the interface.
@@ -21,6 +22,15 @@ export type JumpTarget =
   | { kind: 'project'; encoded: string }
   | { kind: 'session'; encoded: string; file: string; archived: boolean }
   | { kind: 'message'; encoded: string; file: string; archived: boolean; anchor?: number };
+
+/**
+ * What selecting a result does.
+ *
+ * An action lands nowhere, so it cannot be a JumpTarget. Carrying only the
+ * id, rather than the action itself, keeps the palette out of the business
+ * of running things: it reports what was chosen and App decides.
+ */
+export type SelectTarget = JumpTarget | { kind: 'action'; id: string };
 
 /**
  * One row of the palette.
@@ -43,8 +53,16 @@ export interface SearchHit {
   subtitle?: string;
   /** Muted trailing text: relative time, session count, archived tag. */
   meta?: string;
+  /**
+   * Header this row sits under inside its group. Hits carrying the same
+   * section must be adjacent, since the palette starts a new header every
+   * time the value changes.
+   */
+  section?: string;
+  /** Titles a destructive row in red. */
+  danger?: boolean;
   score: number;
-  target: JumpTarget;
+  target: SelectTarget;
   /** Provider-owned extra data. Opaque to the engine and the palette. */
   payload?: unknown;
 }
@@ -86,6 +104,13 @@ export interface WorkspaceIndex {
  */
 export interface SearchContext {
   index: WorkspaceIndex;
+  /**
+   * Workspace actions, rebuilt by App each time the palette opens because
+   * their `active` flags and closures describe the current view state.
+   * Unlike the index they are not a snapshot of disk, so they do not belong
+   * in WorkspaceIndex.
+   */
+  actions: WorkspaceAction[];
   signal: AbortSignal;
 }
 
@@ -103,6 +128,12 @@ export interface SearchProvider {
   kind: ResultKind;
   /** Tab label. */
   title: string;
+  /**
+   * Runs on an empty query too, so its tab is visible before anything is
+   * typed. Only worth setting for a small, fixed set: browsing every
+   * project and session would duplicate the sidebar in a tab.
+   */
+  browsable?: boolean;
   enabled(context: SearchContext): boolean;
   search(query: string, context: SearchContext): Promise<SearchHit[]>;
 }

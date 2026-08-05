@@ -67,6 +67,7 @@ export interface JumpActions {
   setDetailTab: (tab: DetailTab) => void;
   setDetailScroll: (value: number) => void;
   setStatus: (status: string) => void;
+  clearProjectFilter: () => void;
 }
 
 /**
@@ -108,11 +109,14 @@ export function useJumpTarget(options: {
         return;
       }
 
-      // A live filter on either panel could hide the very row being jumped
-      // to, so both queries go before anything is selected.
+      // Anything narrowing a panel could hide the very row being jumped to,
+      // and the planned project index counts rows in the unnarrowed list,
+      // so both queries and the project filter go before anything is
+      // selected.
       actions.setSearching(false);
       actions.setProjectQuery('');
       actions.setSessionQuery('');
+      actions.clearProjectFilter();
       if (plan.showArchived !== null) actions.setShowArchived(plan.showArchived);
       actions.setProjectIndex(plan.projectIndex);
       if (plan.detailTab) {
