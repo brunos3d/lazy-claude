@@ -78,6 +78,14 @@ const QUICK_KEYS = new Set(['e', 'E', 'a', 'r', 'd', 'c']);
 export interface AppProps {
   /** Project to open directly, from `lazyclaude <path>`. */
   initialProject?: string;
+  /**
+   * Session to select on mount, set when coming back from Claude Code.
+   * Takes precedence over `initialProject`, which describes where the
+   * process started rather than where the user just was.
+   */
+  initialTarget?: { encoded: string; file: string };
+  /** Status line to show on mount, for how the previous resume ended. */
+  initialStatus?: string;
 }
 
 const HELP_TEXT = `Lazy Claude
@@ -136,6 +144,11 @@ Quick shortcuts (these also work outside the palette)
   c              check session file integrity
   t              toggle live / archived sessions
 
+Resuming
+  Claude Code takes over the terminal, and Lazy Claude takes it back when
+  Claude Code exits, landing on the session you were just in. Set
+  LAZY_CLAUDE_NO_RETURN to exit on handover instead of coming back.
+
 Titles come from the same metadata Claude Code's resume picker uses.
 Sessions whose title is dimmed had it inferred from the opening prompt.`;
 
@@ -159,7 +172,7 @@ export function App(props: AppProps) {
   );
 }
 
-function AppShell({ initialProject }: AppProps) {
+function AppShell({ initialProject, initialTarget, initialStatus }: AppProps) {
   const { exit } = useApp();
   const { open, idle } = useOverlays();
   const { columns, rows } = useTerminalSize();
@@ -187,7 +200,7 @@ function AppShell({ initialProject }: AppProps) {
   // reads its order from it.
   const [view, setView] = useState<WorkspaceView>(DEFAULT_VIEW);
   const [searching, setSearching] = useState(false);
-  const [status, setStatus] = useState<string | undefined>();
+  const [status, setStatus] = useState<string | undefined>(initialStatus);
   const [busy, setBusy] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [autoOpened, setAutoOpened] = useState(false);
@@ -277,18 +290,6 @@ function AppShell({ initialProject }: AppProps) {
   }, [allProjectItems, sortedProjects, view.projectFilter, projectQuery, home]);
 
   const projectItems = useMemo(() => projectRows.map((row) => row.item), [projectRows]);
-
-  // Open straight into a project when launched with a path.
-  useEffect(() => {
-    if (autoOpened || !initialProject || !projects) return;
-    setAutoOpened(true);
-    const index = allProjectItems.findIndex(
-      (item) => item.kind === 'project' && item.project.path === initialProject,
-    );
-    if (index < 0) return;
-    setProjectIndex(index);
-    setFocus('sessions');
-  }, [autoOpened, initialProject, projects, allProjectItems]);
 
   const selectedItem = projectItems[Math.min(projectIndex, projectItems.length - 1)] ?? null;
   const selectedProject = selectedItem?.kind === 'project' ? selectedItem.project : null;
@@ -1055,6 +1056,31 @@ function AppShell({ initialProject }: AppProps) {
     currentKey,
     actions: jumpActions,
   });
+
+  /**
+   * Where to land on mount.
+   *
+   * A resume round trip wins over the path argument: the target is where the
+   * user just was, while the argument only says where the process started.
+   * It goes through the jump machinery rather than setting indexes directly,
+   * so the asynchronous session load, the archived list and the "no longer
+   * available" case are all handled already.
+   */
+  useEffect(() => {
+    if (autoOpened || !projects) return;
+    setAutoOpened(true);
+    if (initialTarget) {
+      jumpTo({ kind: 'session', ...initialTarget, archived: false });
+      return;
+    }
+    if (!initialProject) return;
+    const index = allProjectItems.findIndex(
+      (item) => item.kind === 'project' && item.project.path === initialProject,
+    );
+    if (index < 0) return;
+    setProjectIndex(index);
+    setFocus('sessions');
+  }, [autoOpened, initialProject, initialTarget, projects, allProjectItems, jumpTo]);
 
   /** The palette selects; deciding what a selection means happens here. */
   const handleSelect = useCallback(

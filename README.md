@@ -49,7 +49,7 @@ Lazy Claude solves both without touching Claude Code itself. It reads the same m
 - Sortable and filterable lists: order by date, size or name, or narrow to the projects that need attention
 - Fuzzy search (`/`) inside each panel, fzf-style, with matched characters highlighted
 - Session inspector with four tabs: overview statistics, conversation preview, activity timeline and file list
-- Resume in Claude Code from anywhere, with or without permission prompts
+- Resume in Claude Code from anywhere, with or without permission prompts, and land back in Lazy Claude when it exits
 - Move a project and migrate every session reference, including nested sub-projects and worktrees
 - Repair references after a manual `mv` or rename
 - Archive, restore and delete individual sessions
@@ -244,6 +244,8 @@ Destructive actions confirm first and show the exact planned steps.
 
 `e` resumes the highlighted session, `E` resumes it with `--dangerously-skip-permissions` after a confirmation that shows the exact command.
 
+Resuming is a round trip. Lazy Claude unmounts and hands the real terminal to Claude Code, then comes back up when Claude Code exits, selecting the session you were just working in. Nothing runs underneath in the meantime: Claude Code gets the terminal to itself, and a non-zero exit is reported in the status line on the way back. Set `LAZY_CLAUDE_NO_RETURN` to exit on handover instead, which is what you want if you use `lazyclaude <path>` as a one-shot launcher.
+
 Neither wraps Claude Code. Lazy Claude unmounts, leaves the alternate screen, prints the shell equivalent, then executes Claude Code in the project's own directory with stdio inherited. What you get is the same as typing:
 
 ```bash
@@ -424,6 +426,7 @@ The TUI needs a TTY and exits with an error otherwise. Use the CLI to inspect th
 | `LAZY_CLAUDE_CLAUDE_DIR`  | Override the Claude data directory. Useful for testing against a copy |
 | `CLAUDE_CONFIG_DIR`       | Respected when set, the same variable Claude Code uses                |
 | `LAZY_CLAUDE_CLAUDE_BIN`  | Path to the `claude` executable, when it is not on `PATH`             |
+| `LAZY_CLAUDE_NO_RETURN`   | Exit when handing over to Claude Code instead of coming back           |
 
 The data directory resolves in that order and falls back to `~/.claude`.
 

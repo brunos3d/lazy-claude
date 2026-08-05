@@ -157,6 +157,8 @@ All global keybindings live in `src/ui/keys.ts`. The palette check runs before e
 
 Resuming does not wrap Claude Code. `LauncherService.request(plan)` stores a validated plan, Ink unmounts, `cli.tsx` leaves the alternate screen, and only then does it `spawnSync` `claude --resume` with stdio inherited.
 
+It is a round trip. `main()` loops: mount Ink, hand over, mount again when the child exits, landing on the session that was just being worked on. Ink is fully torn down in between, which is what makes the second mount safe: raw mode, the stdin listeners and the alternate screen belong to the terminal between iterations rather than to a suspended interface. `enterFullscreen` and `leaveFullscreen` have to stay balanced, because the CSI 22/23 title stack is pushed and popped once per iteration and a missing pop leaves the window titled after the process exits. `LAZY_CLAUDE_NO_RETURN` restores the old exit-on-handoff behaviour, and a spawn failure still exits, since Claude Code never ran and the alternate screen would hide the error.
+
 Validation (missing binary, moved project directory, deleted or archived session file) happens before the interface exits, so failures surface as dialogs rather than a broken terminal. Launch modes are data in `LAUNCH_MODES`; a new mode is an entry there, not a UI change.
 
 ## Terminal title

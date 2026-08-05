@@ -49,6 +49,13 @@ export interface LaunchPlan {
   /** Shell equivalent, shown to the user before handing over. */
   shell: string;
   mode: LaunchMode;
+  /**
+   * Where the interface should land when Claude Code exits and Lazy Claude
+   * comes back up. Kept as plain strings rather than the SessionEntry
+   * because the session on disk will have changed by then: Claude Code
+   * appends to the file while it runs, so only the identity is still valid.
+   */
+  target: { id: string; file: string; encoded: string };
 }
 
 /** Thrown for conditions the user can act on, with a readable reason. */
@@ -159,6 +166,7 @@ class LauncherServiceImpl {
       env: { ...process.env, ...(mode.env ?? {}) },
       shell: `cd ${projectPath} && claude ${args.join(' ')}`,
       mode,
+      target: { id: session.id, file: session.file, encoded: session.encoded },
     };
   }
 

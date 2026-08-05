@@ -126,6 +126,13 @@ Panels are sized from `useTerminalSize()` and pass explicit `height`/`width` dow
 
 Resuming does not wrap Claude Code. `LauncherService.request(plan)` stores a validated plan, Ink unmounts, `cli.tsx` leaves the alternate screen and only then `spawnSync`s `claude --resume` with stdio inherited. Validation (missing binary, moved project directory, deleted or archived session file) happens before the interface exits so failures surface as dialogs, not a broken terminal. Launch modes are data in `LAUNCH_MODES`; a new mode is an entry there, not UI changes.
 
+It is a round trip, not an exit. `main()` loops: mount Ink, hand over, mount again once the child exits. That works because Ink is fully torn down in between, so raw mode, the stdin listeners and the alternate screen belong to the terminal rather than to a suspended interface. Two consequences to respect:
+
+- `enterFullscreen`/`leaveFullscreen` must stay balanced. The CSI 22/23 title stack is pushed and popped per iteration, and one missing pop leaves the window titled "Lazy Claude" after the process is gone.
+- `LaunchPlan.target` carries the session identity, not a `SessionEntry`, because Claude Code appends to the file while it runs. The return goes through `jumpTo`, which already handles the asynchronous session load and the case where the session vanished.
+
+A spawn failure still exits: Claude Code never ran, and re-entering the alternate screen would swallow the error. `LAZY_CLAUDE_NO_RETURN` restores the old exit-on-handoff behaviour.
+
 ## Conventions
 
 - ESM throughout (`"type": "module"`, `module: NodeNext`). Relative imports must carry the `.js` extension, including from `.tsx` files.
