@@ -71,7 +71,7 @@ A new dialog type means adding a spec to the `OverlaySpec` union in `OverlayCont
 
 `x` and `ctrl+k` divide by one mechanical rule, and it has to stay mechanical or both fill with the same entries.
 
-- `x` (`src/ui/actions/registry.ts`) acts on the highlighted project or session. Remove the selection and the entry has nothing to run against.
+- `x` (`src/ui/actions/registry.ts`) acts on the highlighted project or session. Remove the selection and the entry has nothing to run against. The session counts as selected only once focus reaches the sessions panel: the registry nulls it out while focus is on projects, so browsing projects offers project actions (including starting a new session) and never fires a session action against a row the user has not chosen.
 - `ctrl+k` Actions (`src/services/actions/`) acts on the workspace or on how it is displayed, and reads no selection.
 
 `src/services/actions/` mirrors the search provider layer: a provider owns one category and returns `ActionSpec`s, `ActionRegistry` concatenates providers and stamps the category on so an action cannot claim a section its provider does not own, and `CATEGORY_ORDER` decides presentation the way `GROUP_ORDER` does for search. `ActionContext` carries the current view, a view setter, and the workspace handlers App already builds.
@@ -129,7 +129,7 @@ Resuming does not wrap Claude Code. `LauncherService.request(plan)` stores a val
 It is a round trip, not an exit. `main()` loops: mount Ink, hand over, mount again once the child exits. That works because Ink is fully torn down in between, so raw mode, the stdin listeners and the alternate screen belong to the terminal rather than to a suspended interface. Two consequences to respect:
 
 - `enterFullscreen`/`leaveFullscreen` must stay balanced. The CSI 22/23 title stack is pushed and popped per iteration, and one missing pop leaves the window titled "Lazy Claude" after the process is gone.
-- `LaunchPlan.target` carries the session identity, not a `SessionEntry`, because Claude Code appends to the file while it runs. The return goes through `jumpTo`, which already handles the asynchronous session load and the case where the session vanished.
+- `LaunchPlan.target` carries the session identity, not a `SessionEntry`, because Claude Code appends to the file while it runs. A new session (`prepareNew`) has no identity until the child creates it, so its target is the project and the rediscovery on re-mount surfaces the fresh session. The return goes through `jumpTo`, which already handles the asynchronous session load and the case where the session vanished.
 
 A spawn failure still exits: Claude Code never ran, and re-entering the alternate screen would swallow the error. `LAZY_CLAUDE_NO_RETURN` restores the old exit-on-handoff behaviour.
 

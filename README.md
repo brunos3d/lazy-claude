@@ -216,7 +216,7 @@ Press `x` for the action menu. It holds the operations that act on the highlight
 
 ![Project actions menu](docs/screenshot-project-actions-menu.png)
 
-The menu adapts to the focused panel. From Projects it offers the project operations; from Sessions it drops them and leads with the session ones.
+The menu adapts to the focused panel. From Projects only the project operations appear: the sessions panel always highlights a row, but you have not chosen it yet, so session actions wait until Sessions or Details has focus.
 
 ![Session actions menu](docs/screenshot-session-actions-menu.png)
 
@@ -228,6 +228,8 @@ Inside the menu, `enter` runs the selection and typing a shortcut key runs it di
 | `E` | Resume session (yolo) | Session   |
 | `a` | Archive session     | Session     |
 | `r` | Restore session     | Session     |
+| `n` | New session         | Project     |
+| `N` | New session (yolo)  | Project     |
 | `m` | Move project        | Project     |
 | `F` | Repair references   | Project     |
 | `p` | Pack project        | Project     |
@@ -254,6 +256,12 @@ claude --resume <session-id>
 ```
 
 Everything is validated before the interface exits, so a missing `claude` binary, a project directory that has moved, a deleted session file, or an archived session (invisible to Claude Code until restored) each produce a dialog you can act on instead of a broken terminal.
+
+### Starting a new session
+
+`n` starts a fresh Claude Code session in the highlighted project, from any panel. `N` does the same with `--dangerously-skip-permissions` after a confirmation. It is the same round trip as a resume, minus the `--resume` flag: browse to a project, press `n`, work, exit, and you are back in Lazy Claude with the new session at the top of the project's list.
+
+Since there is no session yet, the return lands on the project rather than a session, and both keys are disabled while the project directory is missing on disk.
 
 ### Moving a project
 
@@ -355,6 +363,8 @@ Actions
 | `x` | open the action menu                                |
 | `e` | resume the session in Claude Code                   |
 | `E` | resume with `--dangerously-skip-permissions`        |
+| `n` | start a new session in the highlighted project      |
+| `N` | new session with `--dangerously-skip-permissions`   |
 | `a` | archive the session                                 |
 | `r` | restore an archived session                         |
 | `d` | delete the session permanently                      |

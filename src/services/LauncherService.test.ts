@@ -47,6 +47,7 @@ test('a resume plan carries where to come back to', async () => {
     // The interface re-mounts when Claude Code exits and needs this to land
     // on the session that was just being worked on.
     assert.deepEqual(plan.target, {
+      kind: 'session',
       id: session.id,
       file: session.file,
       encoded: session.encoded,
@@ -65,7 +66,8 @@ test('the dangerous mode carries the same target, and its flag', async () => {
       LauncherService.prepare(session, projectPath, LAUNCH_MODES.resumeDangerous),
     );
     // Both resume modes come back the same way; only the arguments differ.
-    assert.equal(plan.target.id, session.id);
+    assert.equal(plan.target.kind, 'session');
+    assert.equal(plan.target.kind === 'session' && plan.target.id, session.id);
     assert.deepEqual(plan.args, ['--dangerously-skip-permissions', '--resume', session.id]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -114,6 +116,64 @@ test('an unusable binary override is caught here, not at spawn time', async () =
   } finally {
     if (previous === undefined) delete process.env.LAZY_CLAUDE_CLAUDE_BIN;
     else process.env.LAZY_CLAUDE_CLAUDE_BIN = previous;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a new-session plan targets the project and never passes --resume', async () => {
+  const { root, projectPath } = await fixture();
+  try {
+    const plan = await withFakeBinary(() =>
+      LauncherService.prepareNew(projectPath, '-tmp-project', LAUNCH_MODES.newSession),
+    );
+    // There is no session yet, so the only place to come back to is the
+    // project itself; the rediscovery on re-mount surfaces the new session.
+    assert.deepEqual(plan.target, { kind: 'project', encoded: '-tmp-project' });
+    assert.deepEqual(plan.args, []);
+    assert.equal(plan.cwd, projectPath);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the dangerous new-session mode carries its flag', async () => {
+  const { root, projectPath } = await fixture();
+  try {
+    const plan = await withFakeBinary(() =>
+      LauncherService.prepareNew(projectPath, '-tmp-project', LAUNCH_MODES.newSessionDangerous),
+    );
+    assert.deepEqual(plan.args, ['--dangerously-skip-permissions']);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a missing project directory refuses a new session', async () => {
+  const { root } = await fixture();
+  try {
+    await assert.rejects(
+      () =>
+        withFakeBinary(() =>
+          LauncherService.prepareNew(path.join(root, 'gone'), '-gone', LAUNCH_MODES.newSession),
+        ),
+      LaunchError,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a new session without a known project directory refuses to launch', async () => {
+  const { root } = await fixture();
+  try {
+    await assert.rejects(
+      () =>
+        withFakeBinary(() =>
+          LauncherService.prepareNew(undefined, '-orphan', LAUNCH_MODES.newSession),
+        ),
+      LaunchError,
+    );
+  } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });

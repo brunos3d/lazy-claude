@@ -39,7 +39,33 @@ export const LAUNCH_MODES = {
     danger: true,
     args: ['--dangerously-skip-permissions'],
   },
+  newSession: {
+    id: 'newSession',
+    label: 'New session',
+    description: 'Start a fresh Claude Code session in this project',
+  },
+  newSessionDangerous: {
+    id: 'newSessionDangerous',
+    label: 'New session (skip permissions)',
+    description: 'Start a fresh session without interactive permission prompts',
+    danger: true,
+    args: ['--dangerously-skip-permissions'],
+  },
 } satisfies Record<string, LaunchMode>;
+
+/**
+ * Where the interface should land when Claude Code exits and Lazy Claude
+ * comes back up. Kept as plain strings rather than the SessionEntry
+ * because the session on disk will have changed by then: Claude Code
+ * appends to the file while it runs, so only the identity is still valid.
+ *
+ * A new session has no identity at all until Claude Code creates it, so
+ * those launches come back to the project and let the rediscovery on
+ * re-mount surface whatever the child wrote.
+ */
+export type LaunchTarget =
+  | { kind: 'session'; id: string; file: string; encoded: string }
+  | { kind: 'project'; encoded: string };
 
 export interface LaunchPlan {
   command: string;
@@ -49,13 +75,7 @@ export interface LaunchPlan {
   /** Shell equivalent, shown to the user before handing over. */
   shell: string;
   mode: LaunchMode;
-  /**
-   * Where the interface should land when Claude Code exits and Lazy Claude
-   * comes back up. Kept as plain strings rather than the SessionEntry
-   * because the session on disk will have changed by then: Claude Code
-   * appends to the file while it runs, so only the identity is still valid.
-   */
-  target: { id: string; file: string; encoded: string };
+  target: LaunchTarget;
 }
 
 /** Thrown for conditions the user can act on, with a readable reason. */
@@ -166,7 +186,54 @@ class LauncherServiceImpl {
       env: { ...process.env, ...(mode.env ?? {}) },
       shell: `cd ${projectPath} && claude ${args.join(' ')}`,
       mode,
-      target: { id: session.id, file: session.file, encoded: session.encoded },
+      target: { kind: 'session', id: session.id, file: session.file, encoded: session.encoded },
+    };
+  }
+
+  /**
+   * Build the plan for a fresh session: same validation as a resume minus
+   * everything that needs an existing session file.
+   */
+  async prepareNew(
+    projectPath: string | undefined,
+    encoded: string,
+    mode: LaunchMode,
+  ): Promise<LaunchPlan> {
+    const command = this.findClaude();
+    if (!command) {
+      throw new LaunchError(
+        process.env.LAZY_CLAUDE_CLAUDE_BIN
+          ? `LAZY_CLAUDE_CLAUDE_BIN is set to "${process.env.LAZY_CLAUDE_CLAUDE_BIN}", which is not an executable file.`
+          : 'Claude Code executable not found on PATH.',
+        'Install Claude Code, or set LAZY_CLAUDE_CLAUDE_BIN to its full path.',
+      );
+    }
+
+    if (!projectPath) {
+      throw new LaunchError(
+        'This project has no known directory.',
+        'It is an orphaned session folder. Repair the reference first.',
+      );
+    }
+
+    if (!(await isDirectory(projectPath))) {
+      throw new LaunchError(
+        `The project directory no longer exists: ${projectPath}`,
+        'Move or repair the project first, then start a session.',
+      );
+    }
+
+    const args = [...(mode.args ?? [])];
+    const wrapped = mode.wrap ? mode.wrap(command, args) : { command, args };
+
+    return {
+      command: wrapped.command,
+      args: wrapped.args,
+      cwd: projectPath,
+      env: { ...process.env, ...(mode.env ?? {}) },
+      shell: `cd ${projectPath} && ${['claude', ...args].join(' ')}`,
+      mode,
+      target: { kind: 'project', encoded },
     };
   }
 
