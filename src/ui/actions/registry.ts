@@ -50,6 +50,8 @@ export interface ActionContext {
 export interface ActionHandlers {
   resume: () => void;
   resumeDangerous: () => void;
+  newSession: () => void;
+  newSessionDangerous: () => void;
   archiveSession: () => void;
   restoreSession: () => void;
   deleteSession: () => void;
@@ -65,7 +67,12 @@ export interface ActionHandlers {
 export function buildActionCategories(
   context: ActionContext,
 ): ActionCategory[] {
-  const { project, session, handlers } = context;
+  const { project, handlers } = context;
+  // The sessions panel always highlights a row, but from the projects panel
+  // the user has not chosen it. Treating it as unselected keeps the menu
+  // about the project and stops a session action from acting on a row the
+  // user may never have looked at.
+  const session = context.focus === "projects" ? null : context.session;
   const categories: ActionCategory[] = [];
 
   const sessionActions: ActionDefinition[] = [];
@@ -121,6 +128,23 @@ export function buildActionCategories(
   if (project) {
     const missing = !project.exists;
     projectActions.push(
+      {
+        key: "n",
+        label: "New session",
+        description: "Start a fresh Claude Code session here",
+        run: handlers.newSession,
+        disabled: missing,
+        disabledReason: "project directory is missing",
+      },
+      {
+        key: "N",
+        label: "New session (yolo)",
+        description: "Start with --dangerously-skip-permissions",
+        danger: true,
+        run: handlers.newSessionDangerous,
+        disabled: missing,
+        disabledReason: "project directory is missing",
+      },
       {
         key: "m",
         label: "Move project",

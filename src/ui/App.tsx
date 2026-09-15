@@ -25,6 +25,7 @@ import { ConversationService, type Conversation } from '../services/Conversation
 import {
   LAUNCH_MODES,
   LauncherService,
+  type LaunchTarget,
   LaunchError,
   type LaunchMode,
 } from '../services/LauncherService.js';
@@ -73,17 +74,19 @@ registerDefaultActions();
  * Actions that keep a global shortcut. These act on the highlighted item
  * and are used constantly; everything else lives in the palette (x).
  */
-const QUICK_KEYS = new Set(['e', 'E', 'a', 'r', 'd', 'c']);
+const QUICK_KEYS = new Set(['e', 'E', 'a', 'r', 'd', 'c', 'n', 'N']);
 
 export interface AppProps {
   /** Project to open directly, from `lazyclaude <path>`. */
   initialProject?: string;
   /**
-   * Session to select on mount, set when coming back from Claude Code.
+   * Where to land on mount, set when coming back from Claude Code.
    * Takes precedence over `initialProject`, which describes where the
-   * process started rather than where the user just was.
+   * process started rather than where the user just was. A resumed
+   * session comes back to that session; a new session only knows its
+   * project, so it comes back there.
    */
-  initialTarget?: { encoded: string; file: string };
+  initialTarget?: LaunchTarget;
   /** Status line to show on mount, for how the previous resume ended. */
   initialStatus?: string;
 }
@@ -138,16 +141,24 @@ Actions (x)
 Quick shortcuts (these also work outside the palette)
   e              resume the session in Claude Code
   E              resume with --dangerously-skip-permissions (confirms first)
+  n              start a new Claude Code session in the project
+  N              new session with --dangerously-skip-permissions (confirms first)
   a              archive session (reversible, hides it from Claude Code)
   r              restore an archived session
   d              delete session permanently
   c              check session file integrity
   t              toggle live / archived sessions
 
-Resuming
+  Session shortcuts act on the highlighted session and need the Sessions
+  or Details panel focused. From the Projects panel only project actions
+  apply, so n and N work from anywhere.
+
+Resuming and starting sessions
   Claude Code takes over the terminal, and Lazy Claude takes it back when
-  Claude Code exits, landing on the session you were just in. Set
-  LAZY_CLAUDE_NO_RETURN to exit on handover instead of coming back.
+  Claude Code exits, landing on the session you were just in. A new
+  session (n) comes back to its project instead, with the fresh session
+  at the top of the list. Set LAZY_CLAUDE_NO_RETURN to exit on handover
+  instead of coming back.
 
 Titles come from the same metadata Claude Code's resume picker uses.
 Sessions whose title is dimmed had it inferred from the opening prompt.`;
@@ -823,6 +834,46 @@ function AppShell({ initialProject, initialTarget, initialStatus }: AppProps) {
     [selectedSession, selectedProject, projectByEncoded, metadata, exit, open, showOverlay],
   );
 
+  /**
+   * Same hand-over as a resume, but for a session that does not exist yet:
+   * validation is about the project only, and the plan comes back to the
+   * project because rediscovery is what surfaces the new session.
+   */
+  const launchNewSession = useCallback(
+    (mode: LaunchMode) => {
+      const project = selectedProject;
+      if (!project) return;
+      setBusy(true);
+      LauncherService.prepareNew(project.orphaned ? undefined : project.path, project.encoded, mode)
+        .then((plan) => {
+          setBusy(false);
+          const handOver = () => {
+            LauncherService.request(plan);
+            exit();
+          };
+          if (!mode.danger) {
+            handOver();
+            return;
+          }
+          open({
+            kind: 'confirm',
+            title: 'New session without permission prompts',
+            danger: true,
+            message: `Start a new session with --dangerously-skip-permissions?\n\nClaude Code will not ask before running commands or editing files in ${plan.cwd}.\n\n${plan.shell}`,
+            onResult: (ok) => {
+              if (ok) handOver();
+            },
+          });
+        })
+        .catch((error: Error) => {
+          setBusy(false);
+          const hint = error instanceof LaunchError && error.hint ? `\n\n${error.hint}` : '';
+          showOverlay('Cannot start session', `${error.message}${hint}`);
+        });
+    },
+    [selectedProject, exit, open, showOverlay],
+  );
+
   const startPrune = useCallback(() => {
     setBusy(true);
     DiagnosticsService.pruneOrphans(true)
@@ -1000,6 +1051,8 @@ function AppShell({ initialProject, initialTarget, initialStatus }: AppProps) {
         handlers: {
           resume: () => launchSession(LAUNCH_MODES.resume),
           resumeDangerous: () => launchSession(LAUNCH_MODES.resumeDangerous),
+          newSession: () => launchNewSession(LAUNCH_MODES.newSession),
+          newSessionDangerous: () => launchNewSession(LAUNCH_MODES.newSessionDangerous),
           archiveSession: () => selectedSession && sessionAction('archive', selectedSession),
           restoreSession: () => selectedSession && sessionAction('restore', selectedSession),
           deleteSession: () => selectedSession && sessionAction('delete', selectedSession),
@@ -1016,6 +1069,7 @@ function AppShell({ initialProject, initialTarget, initialStatus }: AppProps) {
       selectedProject,
       selectedSession,
       launchSession,
+      launchNewSession,
       sessionAction,
       checkSession,
       startMove,
@@ -1070,7 +1124,11 @@ function AppShell({ initialProject, initialTarget, initialStatus }: AppProps) {
     if (autoOpened || !projects) return;
     setAutoOpened(true);
     if (initialTarget) {
-      jumpTo({ kind: 'session', ...initialTarget, archived: false });
+      if (initialTarget.kind === 'session') {
+        jumpTo({ kind: 'session', encoded: initialTarget.encoded, file: initialTarget.file, archived: false });
+      } else {
+        jumpTo({ kind: 'project', encoded: initialTarget.encoded });
+      }
       return;
     }
     if (!initialProject) return;
